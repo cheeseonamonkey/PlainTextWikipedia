@@ -97,6 +97,9 @@ jobs:
             echo "$name=${!name}" >> "$GITHUB_ENV"
           done
 
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+
       - name: Download generated shards
         uses: actions/download-artifact@v4
         with:
