@@ -1,9 +1,7 @@
 """Streaming Wikimedia XML to clean article text.
 
-The public entry points intentionally stay small:
-- iter_articles() handles XML and dump compression.
-- clean_wikitext() handles MediaWiki markup.
-- write_plaintext_shards() owns output files and shard assignment.
+The converter accepts one or more independently parseable XML dump files. This
+makes Wikimedia page-range files usable without loading a full language dump.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, TextIO
+from typing import Iterable, Iterator, TextIO
 
 from html2text import html2text
 import wikitextparser as wtp
@@ -53,7 +51,7 @@ def clean_wikitext(source: str) -> str:
 
 
 def iter_articles(path: Path) -> Iterator[Article]:
-    """Yield current main-namespace, non-redirect articles from a dump."""
+    """Yield current main-namespace, non-redirect articles from one XML file."""
     with _open_dump(path) as stream:
         for _, page in ET.iterparse(stream, events=("end",)):
             if page.tag.rsplit("}", 1)[-1] != "page":
@@ -80,32 +78,42 @@ def iter_articles(path: Path) -> Iterator[Article]:
 
 
 def write_plaintext_shards(
-    dump: Path,
+    dumps: Path | Iterable[Path],
     output_dir: Path,
     shard_count: int = 1,
     prefix: str = "wiki",
     compression_level: int = 9,
+    output_name: str | None = None,
 ) -> int:
+    """Write compressed plaintext, optionally combining several page-range files."""
     if shard_count < 1:
         raise ValueError("shard_count must be positive")
+    if output_name and shard_count != 1:
+        raise ValueError("output_name is only valid when shard_count is 1")
+
+    dump_paths = [dumps] if isinstance(dumps, Path) else list(dumps)
+    if not dump_paths:
+        raise ValueError("at least one dump is required")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     handles: dict[int, TextIO] = {}
     count = 0
 
     try:
-        for article in iter_articles(dump):
-            shard = (article.page_id - 1) % shard_count
-            if shard not in handles:
-                filename = f"{prefix}_{shard + 1:02d}_of_{shard_count:02d}.txt.gz"
-                handles[shard] = gzip.open(
-                    output_dir / filename,
-                    "wt",
-                    encoding="utf-8",
-                    compresslevel=compression_level,
-                    newline="",
-                )
-            handles[shard].write(f"{article.title}\n{article.text}\n\n")
-            count += 1
+        for dump in dump_paths:
+            for article in iter_articles(dump):
+                shard = (article.page_id - 1) % shard_count
+                if shard not in handles:
+                    filename = output_name or f"{prefix}_{shard + 1:02d}_of_{shard_count:02d}.txt.gz"
+                    handles[shard] = gzip.open(
+                        output_dir / filename,
+                        "wt",
+                        encoding="utf-8",
+                        compresslevel=compression_level,
+                        newline="",
+                    )
+                handles[shard].write(f"{article.title}\n{article.text}\n\n")
+                count += 1
     finally:
         for handle in handles.values():
             handle.close()
