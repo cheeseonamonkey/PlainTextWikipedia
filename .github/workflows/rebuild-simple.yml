@@ -46,10 +46,10 @@ jobs:
           chmod 600 "$HOME/.kaggle/kaggle.json"
 
       - name: Publish to Kaggle
-        if: ${{ secrets.KAGGLE_JSON != '' }}
+        if: ${{ env.KAGGLE_JSON != '' }}
         run: |
           cp kaggle-metadata.json output/dataset-metadata.json
-          kaggle datasets version -p output --dataset-metadata output/dataset-metadata.json \
+          kaggle datasets version -p output \
             -m "Complete Simple English rebuild ($(date -u +%Y-%m-%d))" --dir-mode zip
 
       - name: Publish to Hugging Face
