@@ -1,37 +1,41 @@
 # PlainTextWikipedia
 
-Convert Wikipedia database dumps into plain text files (JSON). This can parse literally all of Wikipedia with pretty high fidelity. There's a copy available on [Kaggle Datasets](https://www.kaggle.com/ltcmdrdata/plain-text-wikipedia-202011)
+Convert current Wikimedia XML dumps into compressed plaintext shards.
 
+The converter keeps one current revision per main-namespace page, skips redirects, removes MediaWiki markup, and writes each article as:
 
-## QUICK START
+```text
+Article title
+Plain article text
 
-1. Download and unzip a Wikipedia dump (see Data Sources below) make sure you get a monolithic XML file
-2. Open up `wiki_to_text.py` and edit the filename to point at your XML file. Also update the savedir location
-3. Run `wiki_to_text.py` - it should take about 2.5 days to run, with some variation based on your CPU and storage speed
+```
 
+## Local use
 
-## Data Sources
+Install the dependencies and run:
 
-There are two primary data sources you'll want to use. See the table below for the root url. 
+```bash
+python -m pip install -r REQUIREMENTS.TXT
+python wiki_to_text.py dump.xml.bz2 output --shards 10 --prefix enwiki
+```
 
-| Name | Description | Link |
-|---|---|---|
-| Simplified English Wikipedia | This is only about 1GB and therefore is a great test set | [https://dumps.wikimedia.org/simplewiki/](https://dumps.wikimedia.org/simplewiki/) |
-| English Wikipedia | This is all of Wikipedia, so about 80GB unpacked | [https://dumps.wikimedia.org/enwiki/](https://dumps.wikimedia.org/enwiki/)
+The output files are independent `.txt.gz` shards, assigned by stable page ID. The converter also accepts uncompressed XML, `.gz`, and `.xz` inputs.
 
-Navigate into the latest dump. You're likley looking for the very first file in the download section. They will look something like this:
+## GitHub Actions
 
-- `enwiki-20210401-pages-articles-multistream.xml.bz2 18.1 GB`
-- `simplewiki-20210401-pages-articles-multistream.xml.bz2 203.5 MB`
+- **Refresh Simple English dataset** runs quarterly and can also be started manually.
+- **Rebuild complete Simple English dataset** is manual-only for a clean rebuild or recovery.
 
-Download and extract these to a storage directory. I usually shorten the folder name and filename. 
+Add these repository secrets before publishing:
 
+- `KAGGLE_JSON`: the contents of the Kaggle API JSON credential
+- `HF_TOKEN`: a Hugging Face token with write access to the dataset repository
 
-## Legal
+The workflows validate that output is non-empty and gzip-readable before publishing. Publishing steps are skipped when the corresponding secret is absent.
 
-https://en.wikipedia.org/wiki/Wikipedia:Reusing_Wikipedia_content
+## Data sources and license
 
-Wikipedia is published under [Creative Commons Attribution Share-Alike license (CC-BY-SA)](https://en.wikipedia.org/wiki/Wikipedia:Text_of_Creative_Commons_Attribution-ShareAlike_3.0_Unported_License). 
+- Simplified English Wikipedia dumps: https://dumps.wikimedia.org/simplewiki/
+- English Wikipedia dumps: https://dumps.wikimedia.org/enwiki/
 
-My script is published under the MIT license but this does not confer the same privileges to the material you convert with it. 
-
+Wikipedia text is available under the [Creative Commons Attribution-ShareAlike license (CC-BY-SA)](https://en.wikipedia.org/wiki/Wikipedia:Reusing_Wikipedia_content). The converter code is MIT licensed; that does not change the license of converted Wikipedia text.
