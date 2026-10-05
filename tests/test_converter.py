@@ -1,3 +1,4 @@
+import bz2
 import gzip
 import tempfile
 import unittest
@@ -22,7 +23,7 @@ class ConverterTests(unittest.TestCase):
             first = root / "first.xml.bz2"
             second = root / "second.xml.bz2"
             for path in (first, second):
-                with gzip.open(path, "wt", encoding="utf-8") as stream:
+                with bz2.open(path, "wt", encoding="utf-8") as stream:
                     stream.write(XML.replace("One", path.stem))
             output = root / "output"
 
