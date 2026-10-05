@@ -1,0 +1,6 @@
+{
+  "title": "Plaintext Wikipedia (SimpleEnglish)",
+  "id": "ffatty/plain-text-wikipedia-simpleenglish",
+  "description": "Compressed plaintext Simple English Wikipedia articles. Each article title precedes its cleaned text.",
+  "licenses": [{"name": "CC-BY-SA-3.0"}]
+}
