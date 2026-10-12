@@ -60,3 +60,8 @@ jobs:
         if: ${{ env.HF_TOKEN != '' }}
         run: |
           hf upload "$SIMPLE_HF_REPO" output             --repo-type dataset --token "$HF_TOKEN" --path-in-repo data             --commit-message "Refresh Simple English Wikipedia ($(date -u +%Y-%m-%d))"
+
+      - name: Free runner disk
+        if: always()
+        run: |
+          rm -rf output simplewiki.xml.bz2

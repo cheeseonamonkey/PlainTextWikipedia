@@ -125,11 +125,10 @@ jobs:
           file="${FULL_LANGUAGE}_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
           hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Rebuild $FULL_LANG_NAME Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
 
-      - name: Publish provenance card to Hugging Face
-        if: ${{ matrix.shard == 1 && env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
+      - name: Free runner disk
+        if: always()
         run: |
-          sed             -e "s#__LANG_NAME__#$FULL_LANG_NAME#g"             -e "s#__LANG_CODE__#$FULL_LANG_CODE#g"             -e "s#__SOURCE_URL__#$FULL_SOURCE_BASE_URL#g"             -e "s#__REPO_URL__#$SOURCE_REPO_URL#g"             -e "s#__UPSTREAM_URL__#$UPSTREAM_REPO_URL#g"             config/hf-dataset-card.md > README.md
-          hf upload "$FULL_HF_REPO" README.md README.md             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Credit source repositories for $FULL_LANG_NAME Wikipedia"
+          rm -rf dumps output ranges ranges.txt
 
       - name: Stage shard artifact
         uses: actions/upload-artifact@v4

@@ -89,3 +89,8 @@ jobs:
         run: |
           file="enwiki_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
           hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Refresh English Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
+
+      - name: Free runner disk
+        if: always()
+        run: |
+          rm -rf output

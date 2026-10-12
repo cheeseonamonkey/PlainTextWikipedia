@@ -68,3 +68,8 @@ jobs:
         run: |
           sed             -e "s#__LANG_NAME__#Simple English#g"             -e "s#__LANG_CODE__#simple#g"             -e "s#__SOURCE_URL__#$SIMPLE_SOURCE_URL#g"             -e "s#__REPO_URL__#$SOURCE_REPO_URL#g"             -e "s#__UPSTREAM_URL__#$UPSTREAM_REPO_URL#g"             config/hf-dataset-card.md > README.md
           hf upload "$SIMPLE_HF_REPO" README.md README.md             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Credit source repositories for Simple English Wikipedia"
+
+      - name: Free runner disk
+        if: always()
+        run: |
+          rm -rf output
