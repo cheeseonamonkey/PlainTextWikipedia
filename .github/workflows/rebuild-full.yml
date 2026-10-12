@@ -1,7 +1,21 @@
-name: Rebuild all English Wikipedia shards
+name: Rebuild Wikipedia shards
 
 on:
   workflow_dispatch:
+    inputs:
+      language:
+        description: "Wikipedia project code (for example enwiki, frwiki, dewiki)"
+        required: true
+        default: enwiki
+        type: string
+      kaggle_dataset:
+        description: "Kaggle dataset ID (owner/dataset); leave blank to skip Kaggle publishing"
+        required: false
+        type: string
+      hf_repo:
+        description: "Hugging Face dataset repo ID; leave blank to skip HF publishing"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -34,6 +48,8 @@ jobs:
     timeout-minutes: 360
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      LANGUAGE: ${{ inputs.language }}
+      HF_REPO_INPUT: ${{ inputs.hf_repo }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,9 +58,21 @@ jobs:
           set -a
           . config/datasets.env
           set +a
-          for name in FULL_LANGUAGE FULL_SOURCE_BASE_URL FULL_HF_REPO FULL_SHARD_COUNT; do
-            echo "$name=${!name}" >> "$GITHUB_ENV"
-          done
+          if [[ ! "$LANGUAGE" =~ ^[a-z0-9_-]+wiki$ ]]; then
+            echo "Invalid Wikimedia project code: $LANGUAGE" >&2
+            exit 1
+          fi
+          echo "FULL_LANGUAGE=$LANGUAGE" >> "$GITHUB_ENV"
+          echo "FULL_SOURCE_BASE_URL=https://dumps.wikimedia.org/$LANGUAGE/latest" >> "$GITHUB_ENV"
+          if [[ -n "$HF_REPO_INPUT" ]]; then
+            hf_repo="$HF_REPO_INPUT"
+          elif [[ "$LANGUAGE" == "enwiki" ]]; then
+            hf_repo="$FULL_HF_REPO"
+          else
+            hf_repo=""
+          fi
+          echo "FULL_HF_REPO=$hf_repo" >> "$GITHUB_ENV"
+          echo "FULL_SHARD_COUNT=$FULL_SHARD_COUNT" >> "$GITHUB_ENV"
           echo "SHARD_NUMBER=${{ matrix.shard }}" >> "$GITHUB_ENV"
 
       - name: Install converter dependencies
@@ -60,22 +88,22 @@ jobs:
       - name: Convert the shard
         run: |
           mapfile -t dumps < ranges.txt
-          file="enwiki_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
+          file="${FULL_LANGUAGE}_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
           python wiki_to_text.py "${dumps[@]}" output --output-name "$file"
           test -s "output/$file"
           gzip -t "output/$file"
 
       - name: Publish shard to Hugging Face
-        if: ${{ env.HF_TOKEN != '' }}
+        if: ${{ env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
         run: |
-          file="enwiki_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
-          hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Rebuild English Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
+          file="${FULL_LANGUAGE}_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
+          hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Rebuild $FULL_LANGUAGE Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
 
       - name: Stage shard artifact
         uses: actions/upload-artifact@v4
         with:
-          name: full-english-shard-${{ matrix.shard }}
-          path: output/enwiki_*.txt.gz
+          name: full-${{ inputs.language }}-shard-${{ matrix.shard }}
+          path: output/${{ inputs.language }}_*.txt.gz
           retention-days: 3
 
   publish-kaggle:
@@ -84,7 +112,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      KAGGLE_JSON: ${{ secrets.KAGGLE_JSON }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      KAGGLE_DATASET_INPUT: ${{ inputs.kaggle_dataset }}
+      LANGUAGE: ${{ inputs.language }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,9 +123,20 @@ jobs:
           set -a
           . config/datasets.env
           set +a
-          for name in FULL_KAGGLE_DATASET FULL_SHARD_COUNT; do
-            echo "$name=${!name}" >> "$GITHUB_ENV"
-          done
+          if [[ ! "$LANGUAGE" =~ ^[a-z0-9_-]+wiki$ ]]; then
+            echo "Invalid Wikimedia project code: $LANGUAGE" >&2
+            exit 1
+          fi
+          if [[ -n "$KAGGLE_DATASET_INPUT" ]]; then
+            kaggle_dataset="$KAGGLE_DATASET_INPUT"
+          elif [[ "$LANGUAGE" == "enwiki" ]]; then
+            kaggle_dataset="$FULL_KAGGLE_DATASET"
+          else
+            kaggle_dataset=""
+          fi
+          echo "FULL_KAGGLE_DATASET=$kaggle_dataset" >> "$GITHUB_ENV"
+          echo "FULL_SHARD_COUNT=$FULL_SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "FULL_LANGUAGE=$LANGUAGE" >> "$GITHUB_ENV"
 
       - name: Install Kaggle CLI
         run: python -m pip install --upgrade kaggle
@@ -103,28 +144,25 @@ jobs:
       - name: Download generated shards
         uses: actions/download-artifact@v4
         with:
-          pattern: full-english-shard-*
+          pattern: full-${{ inputs.language }}-shard-*
           merge-multiple: true
           path: publish
 
       - name: Validate all shards
         run: |
-          test "$(find publish -maxdepth 1 -name 'enwiki_*_of_*.txt.gz' | wc -l)" -eq "$FULL_SHARD_COUNT"
-          for file in publish/enwiki_*.txt.gz; do gzip -t "$file"; done
+          test "$(find publish -maxdepth 1 -name "${FULL_LANGUAGE}_*_of_*.txt.gz" | wc -l)" -eq "$FULL_SHARD_COUNT"
+          for file in publish/${FULL_LANGUAGE}_*.txt.gz; do gzip -t "$file"; done
 
       - name: Configure Kaggle credentials
-        if: ${{ env.KAGGLE_JSON != '' }}
-        run: |
-          mkdir -p "$HOME/.kaggle"
-          printf '%s' "$KAGGLE_JSON" > "$HOME/.kaggle/kaggle.json"
-          chmod 600 "$HOME/.kaggle/kaggle.json"
+        if: ${{ env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
+        run: echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
 
       - name: Publish complete dataset to Kaggle
-        if: ${{ env.KAGGLE_JSON != '' }}
+        if: ${{ env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
         run: |
           mkdir -p current
           kaggle datasets download -d "$FULL_KAGGLE_DATASET" -p current --unzip || true
-          cp publish/enwiki_*.txt.gz current/
+          cp publish/${FULL_LANGUAGE}_*.txt.gz current/
           cp kaggle-metadata-full.json current/dataset-metadata.json
-          sed -i "s#ffatty/plaintext-wikipedia-full-english#$FULL_KAGGLE_DATASET#" current/dataset-metadata.json
-          kaggle datasets version -p current             -m "Complete English Wikipedia rebuild ($(date -u +%Y-%m-%d))" --dir-mode zip
+          sed -i "s#ffatty/plaintext-wikipedia-full-english#$FULL_KAGGLE_DATASET#; s/English/$FULL_LANGUAGE/g" current/dataset-metadata.json
+          kaggle datasets version -p current             -m "Complete $FULL_LANGUAGE Wikipedia rebuild ($(date -u +%Y-%m-%d))" --dir-mode zip
