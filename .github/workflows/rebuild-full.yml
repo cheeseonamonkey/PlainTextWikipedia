@@ -4,16 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       language:
-        description: "Wikipedia project code (for example enwiki, frwiki, dewiki)"
+        description: Wikimedia project code (e.g. eswiki or zhwiki)
         required: true
         default: enwiki
         type: string
       kaggle_dataset:
-        description: "Kaggle dataset ID (owner/dataset); leave blank to skip Kaggle publishing"
+        description: Optional Kaggle destination override
         required: false
         type: string
       hf_repo:
-        description: "Hugging Face dataset repo ID; leave blank to skip HF publishing"
+        description: Optional Hugging Face destination override
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      language:
+        required: true
+        type: string
+      kaggle_dataset:
+        required: false
+        type: string
+      hf_repo:
         required: false
         type: string
 
@@ -25,15 +36,25 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
+      count: ${{ steps.plan.outputs.count }}
+    env:
+      LANGUAGE: ${{ inputs.language }}
     steps:
       - uses: actions/checkout@v4
       - id: plan
+        shell: bash
         run: |
-          count="$(sed -n 's/^FULL_SHARD_COUNT=//p' config/datasets.env)"
+          set -euo pipefail
+          [[ "$LANGUAGE" =~ ^[a-z][a-z0-9_-]*wiki$ ]] || exit 1
+          . config/datasets.env
+          available="$(python scripts/download_page_ranges.py --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" --language "$LANGUAGE" --count-only)"
+          count="$FULL_SHARD_COUNT"
+          if (( available < count )); then count="$available"; fi
+          (( count > 0 ))
           python - "$count" >> "$GITHUB_OUTPUT" <<'PY'
-          import json
-          import sys
+          import json, sys
           count = int(sys.argv[1])
+          print(f"count={count}")
           print(f"shards={json.dumps(list(range(1, count + 1)))}")
           PY
 
@@ -47,176 +68,156 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
       LANGUAGE: ${{ inputs.language }}
-      HF_REPO_INPUT: ${{ inputs.hf_repo }}
+      SHARD: ${{ matrix.shard }}
+      COUNT: ${{ needs.plan.outputs.count }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Load dataset configuration
-        run: |
-          set -a
-          . config/datasets.env
-          set +a
-          if [[ ! "$LANGUAGE" =~ ^[a-z0-9_-]+wiki$ ]]; then
-            echo "Invalid Wikimedia project code: $LANGUAGE" >&2
-            exit 1
-          fi
-          lang_code="${LANGUAGE%wiki}"
-          case "$lang_code" in
-            en) lang_name="English" ;;
-            simple) lang_name="Simple English" ;;
-            now|nob) lang_name="Norwegian" ;;
-            nn) lang_name="Norwegian Nynorsk" ;;
-            fr) lang_name="French" ;;
-            de) lang_name="German" ;;
-            es) lang_name="Spanish" ;;
-            pt) lang_name="Portuguese" ;;
-            it) lang_name="Italian" ;;
-            nl) lang_name="Dutch" ;;
-            pl) lang_name="Polish" ;;
-            sv) lang_name="Swedish" ;;
-            da) lang_name="Danish" ;;
-            fi) lang_name="Finnish" ;;
-            ru) lang_name="Russian" ;;
-            ja) lang_name="Japanese" ;;
-            zh) lang_name="Chinese" ;;
-            *) lang_name="${lang_code^}" ;;
-          esac
-          echo "FULL_LANGUAGE=$LANGUAGE" >> "$GITHUB_ENV"
-          echo "FULL_LANG_CODE=$lang_code" >> "$GITHUB_ENV"
-          echo "FULL_LANG_NAME=$lang_name" >> "$GITHUB_ENV"
-          echo "SOURCE_REPO_URL=$SOURCE_REPO_URL" >> "$GITHUB_ENV"
-          echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL" >> "$GITHUB_ENV"
-          echo "FULL_SOURCE_BASE_URL=https://dumps.wikimedia.org/$LANGUAGE/latest" >> "$GITHUB_ENV"
-          lang_prefix="${lang_code^^}"
-          if [[ -n "$HF_REPO_INPUT" ]]; then
-            hf_repo="$HF_REPO_INPUT"
-          elif [[ -n "${FULL_HF_REPO_${lang_prefix}:-}" ]]; then
-            hf_repo="${FULL_HF_REPO_${lang_prefix}}"
-          else
-            hf_repo=""
-          fi
-          echo "FULL_HF_REPO=$hf_repo" >> "$GITHUB_ENV"
-          echo "FULL_SHARD_COUNT=$FULL_SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "SHARD_NUMBER=${{ matrix.shard }}" >> "$GITHUB_ENV"
-
       - name: Install converter dependencies
+        run: python -m pip install -r REQUIREMENTS.TXT
+      - name: Download assigned page ranges
+        shell: bash
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r REQUIREMENTS.TXT huggingface_hub
-
-      - name: Download page-range files for the shard
-        run: |
-          python scripts/download_page_ranges.py             --base-url "$FULL_SOURCE_BASE_URL"             --language "$FULL_LANGUAGE"             --shard "$((SHARD_NUMBER - 1))"             --shard-count "$FULL_SHARD_COUNT"             --output-dir ranges > ranges.txt
+          set -euo pipefail
+          python scripts/download_page_ranges.py \
+            --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
+            --language "$LANGUAGE" --shard "$((SHARD - 1))" \
+            --shard-count "$COUNT" --output-dir ranges > ranges.txt
           test -s ranges.txt
-
-      - name: Convert the shard
+      - name: Convert and validate
+        shell: bash
         run: |
+          set -euo pipefail
           mapfile -t dumps < ranges.txt
-          file="${FULL_LANGUAGE}_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
+          file="$(printf '%s_%02d_of_%02d.txt.gz' "$LANGUAGE" "$SHARD" "$COUNT")"
           python wiki_to_text.py "${dumps[@]}" output --output-name "$file"
           test -s "output/$file"
           gzip -t "output/$file"
-
-      - name: Publish shard to Hugging Face
-        if: ${{ env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
-        run: |
-          file="${FULL_LANGUAGE}_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
-          hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Rebuild $FULL_LANG_NAME Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
-
-      - name: Free runner disk
-        if: always()
-        run: |
-          rm -rf dumps output ranges ranges.txt
-
-      - name: Stage shard artifact
+      - name: Stage compressed shard
         uses: actions/upload-artifact@v4
         with:
-          name: full-${{ inputs.language }}-shard-${{ matrix.shard }}
-          path: output/${{ inputs.language }}_*.txt.gz
-          retention-days: 3
+          name: full-${{ inputs.language }}-${{ matrix.shard }}
+          path: output/*.txt.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - name: Free runner disk
+        if: always()
+        run: rm -rf output ranges ranges.txt
 
-  publish-kaggle:
-    needs: build
-    if: ${{ always() && needs.build.result == 'success' }}
+  publish:
+    needs: [plan, build]
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 360
     env:
-      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-      KAGGLE_DATASET_INPUT: ${{ inputs.kaggle_dataset }}
       LANGUAGE: ${{ inputs.language }}
+      COUNT: ${{ needs.plan.outputs.count }}
+      HF_REPO_INPUT: ${{ inputs.hf_repo }}
+      KAGGLE_DATASET_INPUT: ${{ inputs.kaggle_dataset }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Load dataset configuration
+      - name: Resolve language and publishing destinations
+        shell: bash
         run: |
-          set -a
+          set -euo pipefail
           . config/datasets.env
-          set +a
-          if [[ ! "$LANGUAGE" =~ ^[a-z0-9_-]+wiki$ ]]; then
-            echo "Invalid Wikimedia project code: $LANGUAGE" >&2
-            exit 1
-          fi
-          lang_prefix="${LANGUAGE%wiki}"
-          lang_prefix="${lang_prefix^^}"
-          if [[ -n "$KAGGLE_DATASET_INPUT" ]]; then
-            kaggle_dataset="$KAGGLE_DATASET_INPUT"
-          elif [[ -n "${FULL_KAGGLE_DATASET_${lang_prefix}:-}" ]]; then
-            kaggle_dataset="${FULL_KAGGLE_DATASET_${lang_prefix}}"
-          else
-            kaggle_dataset=""
-          fi
-          echo "FULL_KAGGLE_DATASET=$kaggle_dataset" >> "$GITHUB_ENV"
-          echo "FULL_SHARD_COUNT=$FULL_SHARD_COUNT" >> "$GITHUB_ENV"
-          echo "FULL_LANGUAGE=$LANGUAGE" >> "$GITHUB_ENV"
-
-      - name: Install Kaggle CLI
-        run: python -m pip install --upgrade kaggle
-
-      - name: Download generated shards
+          code="${LANGUAGE%wiki}"
+          hf_key="FULL_HF_REPO_${code^^}"
+          kaggle_key="FULL_KAGGLE_DATASET_${code^^}"
+          hf_id="$HF_REPO_INPUT"
+          kaggle_id="$KAGGLE_DATASET_INPUT"
+          if [[ -z "$hf_id" ]]; then hf_id="${!hf_key:-}"; fi
+          if [[ -z "$kaggle_id" ]]; then kaggle_id="${!kaggle_key:-}"; fi
+          case "$code" in
+            en) name=English ;; es) name=Spanish ;; fr) name=French ;;
+            de) name=German ;; it) name=Italian ;; pt) name=Portuguese ;;
+            ru) name=Russian ;; zh) name=Chinese ;; no) name=Norwegian ;;
+            *) name="$code" ;;
+          esac
+          echo "FULL_HF_REPO=$hf_id" >> "$GITHUB_ENV"
+          echo "FULL_KAGGLE_DATASET=$kaggle_id" >> "$GITHUB_ENV"
+          echo "LANG_CODE=$code" >> "$GITHUB_ENV"
+          echo "LANG_NAME=$name" >> "$GITHUB_ENV"
+          echo "SOURCE_REPO_URL=$SOURCE_REPO_URL" >> "$GITHUB_ENV"
+          echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL" >> "$GITHUB_ENV"
+          echo "HF=$hf_id Kaggle=$kaggle_id"
+      - name: Collect built shards
         uses: actions/download-artifact@v4
         with:
-          pattern: full-${{ inputs.language }}-shard-*
+          pattern: full-${{ inputs.language }}-*
           merge-multiple: true
           path: publish
-
-      - name: Validate all shards
+      - name: Validate complete dataset
+        shell: bash
         run: |
-          test "$(find publish -maxdepth 1 -name "${FULL_LANGUAGE}_*_of_*.txt.gz" | wc -l)" -eq "$FULL_SHARD_COUNT"
-          for file in publish/${FULL_LANGUAGE}_*.txt.gz; do gzip -t "$file"; done
-
-      - name: Configure Kaggle credentials
-        if: ${{ env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
-        run: echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
-
-      - name: Publish complete dataset to Kaggle
-        if: ${{ env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
+          set -euo pipefail
+          count="$(find publish -maxdepth 1 -type f -name "$LANGUAGE"'_*.txt.gz' | wc -l)"
+          test "$count" -eq "$COUNT"
+          for file in publish/*.txt.gz; do gzip -t "$file"; done
+          echo "Validated $count compressed shards"
+      - name: Publish to Hugging Face
+        if: ${{ env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
+        shell: bash
         run: |
-          mkdir -p current
-          kaggle datasets download -d "$FULL_KAGGLE_DATASET" -p current --unzip || true
-          cp publish/${FULL_LANGUAGE}_*.txt.gz current/
-          cp kaggle-metadata-full.json current/dataset-metadata.json
-          lang_code="${FULL_LANGUAGE%wiki}"
-          case "$lang_code" in
-            en) lang_name="English" ;;
-            simple) lang_name="Simple English" ;;
-            now|nob) lang_name="Norwegian" ;;
-            nn) lang_name="Norwegian Nynorsk" ;;
-            fr) lang_name="French" ;;
-            de) lang_name="German" ;;
-            es) lang_name="Spanish" ;;
-            pt) lang_name="Portuguese" ;;
-            it) lang_name="Italian" ;;
-            nl) lang_name="Dutch" ;;
-            pl) lang_name="Polish" ;;
-            sv) lang_name="Swedish" ;;
-            da) lang_name="Danish" ;;
-            fi) lang_name="Finnish" ;;
-            ru) lang_name="Russian" ;;
-            ja) lang_name="Japanese" ;;
-            zh) lang_name="Chinese" ;;
-            *) lang_name="${lang_code^}" ;;
-          esac
-          sed -i "s#ffatty/plaintext-wikipedia-full-english#$FULL_KAGGLE_DATASET#; s/English/$lang_name/g" current/dataset-metadata.json
-          kaggle datasets version -p current             -m "Complete $lang_name Wikipedia rebuild ($(date -u +%Y-%m-%d))" --dir-mode zip
+          set -euo pipefail
+          python -m pip install huggingface_hub
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          e = os.environ
+          api = HfApi(token=e["HF_TOKEN"])
+          repo = e["FULL_HF_REPO"]
+          api.create_repo(repo_id=repo, repo_type="dataset", exist_ok=True)
+          card = Path("config/hf-dataset-card.md").read_text()
+          replacements = {
+              "__LANG_PROJECT__": e["LANGUAGE"],
+              "__LANG_CODE__": e["LANG_CODE"],
+              "__LANG_NAME__": e["LANG_NAME"],
+              "__HF_REPO__": repo,
+              "__SOURCE_URL__": f'https://dumps.wikimedia.org/{e["LANGUAGE"]}/latest',
+              "__REPO_URL__": e["SOURCE_REPO_URL"],
+              "__UPSTREAM_URL__": e["UPSTREAM_REPO_URL"],
+          }
+          for token, value in replacements.items():
+              card = card.replace(token, value)
+          Path("publish/README.md").write_text(card, encoding="utf-8")
+          api.upload_folder(repo_id=repo, repo_type="dataset",
+                            folder_path="publish", commit_message=f'Rebuild {e["LANG_NAME"]} Wikipedia')
+          print(f"https://huggingface.co/datasets/{repo}")
+          PY
+      - name: Publish to Kaggle
+        if: ${{ env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
+        shell: bash
+        env:
+          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install kaggle
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          e = os.environ
+          meta = json.loads(Path("kaggle-metadata-full.json").read_text())
+          meta["id"] = e["FULL_KAGGLE_DATASET"]
+          meta["title"] = f'Plaintext Wikipedia ({e["LANG_NAME"]})'
+          meta["description"] = meta["description"].replace("English", e["LANG_NAME"])
+          meta["description"] = meta["description"].replace("__REPO_URL__", e["SOURCE_REPO_URL"])
+          meta["description"] = meta["description"].replace("__UPSTREAM_URL__", e["UPSTREAM_REPO_URL"])
+          Path("publish/dataset-metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+          PY
+          if kaggle datasets files -d "$FULL_KAGGLE_DATASET" >/dev/null 2>&1; then
+            kaggle datasets version -p publish -m "Rebuild $LANG_NAME Wikipedia $(date -u +%F)" --dir-mode skip
+          else
+            kaggle datasets create -p publish --public --dir-mode skip
+          fi
+          echo "https://www.kaggle.com/datasets/$FULL_KAGGLE_DATASET"
+      - name: Missing publisher warning
+        if: ${{ env.HF_TOKEN == '' || env.KAGGLE_TOKEN == '' }}
+        shell: bash
+        run: |
+          [[ -n "$HF_TOKEN" ]] || echo "::warning::HF_TOKEN absent: HF publication skipped"
+          [[ -n "$KAGGLE_TOKEN" ]] || echo "::warning::KAGGLE_TOKEN absent: Kaggle publication skipped"
