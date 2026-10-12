@@ -186,7 +186,12 @@ jobs:
               card = card.replace(token, value)
           Path("publish/README.md").write_text(card, encoding="utf-8")
           api.upload_folder(repo_id=repo, repo_type="dataset",
-                            folder_path="publish", commit_message=f'Rebuild {e["LANG_NAME"]} Wikipedia')
+                            folder_path="publish", path_in_repo="data",
+                            allow_patterns="*.txt.gz",
+                            commit_message=f'Rebuild {e["LANG_NAME"]} Wikipedia shards')
+          api.upload_file(repo_id=repo, repo_type="dataset",
+                          path_or_fileobj="publish/README.md", path_in_repo="README.md",
+                          commit_message=f'Update {e["LANG_NAME"]} dataset card')
           print(f"https://huggingface.co/datasets/{repo}")
           PY
       - name: Publish to Kaggle
