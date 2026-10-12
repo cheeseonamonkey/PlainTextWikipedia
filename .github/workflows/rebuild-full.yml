@@ -62,12 +62,38 @@ jobs:
             echo "Invalid Wikimedia project code: $LANGUAGE" >&2
             exit 1
           fi
+          lang_code="${LANGUAGE%wiki}"
+          case "$lang_code" in
+            en) lang_name="English" ;;
+            simple) lang_name="Simple English" ;;
+            now|nob) lang_name="Norwegian" ;;
+            nn) lang_name="Norwegian Nynorsk" ;;
+            fr) lang_name="French" ;;
+            de) lang_name="German" ;;
+            es) lang_name="Spanish" ;;
+            pt) lang_name="Portuguese" ;;
+            it) lang_name="Italian" ;;
+            nl) lang_name="Dutch" ;;
+            pl) lang_name="Polish" ;;
+            sv) lang_name="Swedish" ;;
+            da) lang_name="Danish" ;;
+            fi) lang_name="Finnish" ;;
+            ru) lang_name="Russian" ;;
+            ja) lang_name="Japanese" ;;
+            zh) lang_name="Chinese" ;;
+            *) lang_name="${lang_code^}" ;;
+          esac
           echo "FULL_LANGUAGE=$LANGUAGE" >> "$GITHUB_ENV"
+          echo "FULL_LANG_CODE=$lang_code" >> "$GITHUB_ENV"
+          echo "FULL_LANG_NAME=$lang_name" >> "$GITHUB_ENV"
+          echo "SOURCE_REPO_URL=$SOURCE_REPO_URL" >> "$GITHUB_ENV"
+          echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL" >> "$GITHUB_ENV"
           echo "FULL_SOURCE_BASE_URL=https://dumps.wikimedia.org/$LANGUAGE/latest" >> "$GITHUB_ENV"
+          lang_prefix="${lang_code^^}"
           if [[ -n "$HF_REPO_INPUT" ]]; then
             hf_repo="$HF_REPO_INPUT"
-          elif [[ "$LANGUAGE" == "enwiki" ]]; then
-            hf_repo="$FULL_HF_REPO"
+          elif [[ -n "${FULL_HF_REPO_${lang_prefix}:-}" ]]; then
+            hf_repo="${FULL_HF_REPO_${lang_prefix}}"
           else
             hf_repo=""
           fi
@@ -97,7 +123,13 @@ jobs:
         if: ${{ env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
         run: |
           file="${FULL_LANGUAGE}_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
-          hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Rebuild $FULL_LANGUAGE Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
+          hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Rebuild $FULL_LANG_NAME Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
+
+      - name: Publish provenance card to Hugging Face
+        if: ${{ matrix.shard == 1 && env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
+        run: |
+          sed             -e "s#__LANG_NAME__#$FULL_LANG_NAME#g"             -e "s#__LANG_CODE__#$FULL_LANG_CODE#g"             -e "s#__SOURCE_URL__#$FULL_SOURCE_BASE_URL#g"             -e "s#__REPO_URL__#$SOURCE_REPO_URL#g"             -e "s#__UPSTREAM_URL__#$UPSTREAM_REPO_URL#g"             config/hf-dataset-card.md > README.md
+          hf upload "$FULL_HF_REPO" README.md README.md             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Credit source repositories for $FULL_LANG_NAME Wikipedia"
 
       - name: Stage shard artifact
         uses: actions/upload-artifact@v4
@@ -127,10 +159,12 @@ jobs:
             echo "Invalid Wikimedia project code: $LANGUAGE" >&2
             exit 1
           fi
+          lang_prefix="${LANGUAGE%wiki}"
+          lang_prefix="${lang_prefix^^}"
           if [[ -n "$KAGGLE_DATASET_INPUT" ]]; then
             kaggle_dataset="$KAGGLE_DATASET_INPUT"
-          elif [[ "$LANGUAGE" == "enwiki" ]]; then
-            kaggle_dataset="$FULL_KAGGLE_DATASET"
+          elif [[ -n "${FULL_KAGGLE_DATASET_${lang_prefix}:-}" ]]; then
+            kaggle_dataset="${FULL_KAGGLE_DATASET_${lang_prefix}}"
           else
             kaggle_dataset=""
           fi
@@ -164,5 +198,26 @@ jobs:
           kaggle datasets download -d "$FULL_KAGGLE_DATASET" -p current --unzip || true
           cp publish/${FULL_LANGUAGE}_*.txt.gz current/
           cp kaggle-metadata-full.json current/dataset-metadata.json
-          sed -i "s#ffatty/plaintext-wikipedia-full-english#$FULL_KAGGLE_DATASET#; s/English/$FULL_LANGUAGE/g" current/dataset-metadata.json
-          kaggle datasets version -p current             -m "Complete $FULL_LANGUAGE Wikipedia rebuild ($(date -u +%Y-%m-%d))" --dir-mode zip
+          lang_code="${FULL_LANGUAGE%wiki}"
+          case "$lang_code" in
+            en) lang_name="English" ;;
+            simple) lang_name="Simple English" ;;
+            now|nob) lang_name="Norwegian" ;;
+            nn) lang_name="Norwegian Nynorsk" ;;
+            fr) lang_name="French" ;;
+            de) lang_name="German" ;;
+            es) lang_name="Spanish" ;;
+            pt) lang_name="Portuguese" ;;
+            it) lang_name="Italian" ;;
+            nl) lang_name="Dutch" ;;
+            pl) lang_name="Polish" ;;
+            sv) lang_name="Swedish" ;;
+            da) lang_name="Danish" ;;
+            fi) lang_name="Finnish" ;;
+            ru) lang_name="Russian" ;;
+            ja) lang_name="Japanese" ;;
+            zh) lang_name="Chinese" ;;
+            *) lang_name="${lang_code^}" ;;
+          esac
+          sed -i "s#ffatty/plaintext-wikipedia-full-english#$FULL_KAGGLE_DATASET#; s/English/$lang_name/g" current/dataset-metadata.json
+          kaggle datasets version -p current             -m "Complete $lang_name Wikipedia rebuild ($(date -u +%Y-%m-%d))" --dir-mode zip

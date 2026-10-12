@@ -1,6 +1,7 @@
 {
   "title": "Plaintext Wikipedia (SimpleEnglish)",
   "id": "ffatty/plain-text-wikipedia-simpleenglish",
-  "description": "Compressed plaintext Simple English Wikipedia articles. Each article title precedes its cleaned text.",
+  "subtitle": "Built by cheeseonamonkey/PlainTextWikipedia",
+  "description": "Compressed plaintext Simple English Wikipedia articles. Each article title precedes its cleaned text.\n\nCreated and maintained by [cheeseonamonkey/PlainTextWikipedia](https://github.com/cheeseonamonkey/PlainTextWikipedia), the maintained fork that builds and publishes this dataset. Based on the original unmaintained project [daveshap/PlainTextWikipedia](https://github.com/daveshap/PlainTextWikipedia). Source data: official Wikimedia dumps.",
   "licenses": [{"name": "CC-BY-SA-3.0"}]
 }

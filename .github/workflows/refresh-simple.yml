@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      KAGGLE_JSON: ${{ secrets.KAGGLE_JSON }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -46,14 +46,11 @@ jobs:
           test "$(gzip -cd output/simplewiki_01_of_01.txt.gz | wc -l)" -gt 0
 
       - name: Configure Kaggle credentials
-        if: ${{ env.KAGGLE_JSON != '' }}
-        run: |
-          mkdir -p "$HOME/.kaggle"
-          printf '%s' "$KAGGLE_JSON" > "$HOME/.kaggle/kaggle.json"
-          chmod 600 "$HOME/.kaggle/kaggle.json"
+        if: ${{ env.KAGGLE_TOKEN != '' }}
+        run: echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
 
       - name: Publish to Kaggle
-        if: ${{ env.KAGGLE_JSON != '' }}
+        if: ${{ env.KAGGLE_TOKEN != '' }}
         run: |
           cp kaggle-metadata.json output/dataset-metadata.json
           sed -i "s#ffatty/plain-text-wikipedia-simpleenglish#$SIMPLE_KAGGLE_DATASET#" output/dataset-metadata.json

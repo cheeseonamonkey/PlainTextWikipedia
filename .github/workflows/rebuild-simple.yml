@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      KAGGLE_JSON: ${{ secrets.KAGGLE_JSON }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +24,8 @@ jobs:
           for name in SIMPLE_SOURCE_URL SIMPLE_KAGGLE_DATASET SIMPLE_HF_REPO SIMPLE_SHARD_COUNT; do
             echo "$name=${!name}" >> "$GITHUB_ENV"
           done
+          echo "SOURCE_REPO_URL=$SOURCE_REPO_URL" >> "$GITHUB_ENV"
+          echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL" >> "$GITHUB_ENV"
 
       - name: Install converter dependencies
         run: |
@@ -46,14 +48,11 @@ jobs:
           echo "Validated $articles articles"
 
       - name: Configure Kaggle credentials
-        if: ${{ env.KAGGLE_JSON != '' }}
-        run: |
-          mkdir -p "$HOME/.kaggle"
-          printf '%s' "$KAGGLE_JSON" > "$HOME/.kaggle/kaggle.json"
-          chmod 600 "$HOME/.kaggle/kaggle.json"
+        if: ${{ env.KAGGLE_TOKEN != '' }}
+        run: echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
 
       - name: Publish to Kaggle
-        if: ${{ env.KAGGLE_JSON != '' }}
+        if: ${{ env.KAGGLE_TOKEN != '' }}
         run: |
           cp kaggle-metadata.json output/dataset-metadata.json
           sed -i "s#ffatty/plain-text-wikipedia-simpleenglish#$SIMPLE_KAGGLE_DATASET#" output/dataset-metadata.json
@@ -63,3 +62,9 @@ jobs:
         if: ${{ env.HF_TOKEN != '' }}
         run: |
           hf upload "$SIMPLE_HF_REPO" output             --repo-type dataset --token "$HF_TOKEN" --path-in-repo data             --commit-message "Complete Simple English rebuild ($(date -u +%Y-%m-%d))"
+
+      - name: Publish provenance card to Hugging Face
+        if: ${{ env.HF_TOKEN != '' }}
+        run: |
+          sed             -e "s#__LANG_NAME__#Simple English#g"             -e "s#__LANG_CODE__#simple#g"             -e "s#__SOURCE_URL__#$SIMPLE_SOURCE_URL#g"             -e "s#__REPO_URL__#$SOURCE_REPO_URL#g"             -e "s#__UPSTREAM_URL__#$UPSTREAM_REPO_URL#g"             config/hf-dataset-card.md > README.md
+          hf upload "$SIMPLE_HF_REPO" README.md README.md             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Credit source repositories for Simple English Wikipedia"
