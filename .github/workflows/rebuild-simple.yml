@@ -2,6 +2,7 @@ name: Rebuild complete Simple English dataset
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -54,19 +55,54 @@ jobs:
       - name: Publish to Kaggle
         if: ${{ env.KAGGLE_TOKEN != '' }}
         run: |
-          cp kaggle-metadata.json output/dataset-metadata.json
-          sed -i "s#ffatty/plain-text-wikipedia-simpleenglish#$SIMPLE_KAGGLE_DATASET#" output/dataset-metadata.json
-          kaggle datasets version -p output             -m "Complete Simple English rebuild ($(date -u +%Y-%m-%d))" --dir-mode zip
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          e = os.environ
+          meta = json.loads(Path("kaggle-metadata.json").read_text())
+          meta["id"] = e["SIMPLE_KAGGLE_DATASET"]
+          meta["description"] = meta["description"].replace("__REPO_URL__", e["SOURCE_REPO_URL"])
+          meta["description"] = meta["description"].replace("__UPSTREAM_URL__", e["UPSTREAM_REPO_URL"])
+          Path("output/dataset-metadata.json").write_text(json.dumps(meta, indent=2))
+          PY
+          if kaggle datasets files -d "$SIMPLE_KAGGLE_DATASET" >/dev/null 2>&1; then
+            kaggle datasets version -p output -m "Complete Simple English rebuild ($(date -u +%F))" --dir-mode skip
+          else
+            kaggle datasets create -p output --public --dir-mode skip
+          fi
 
       - name: Publish to Hugging Face
         if: ${{ env.HF_TOKEN != '' }}
         run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          e = os.environ
+          HfApi(token=e["HF_TOKEN"]).create_repo(
+              repo_id=e["SIMPLE_HF_REPO"], repo_type="dataset", exist_ok=True)
+          PY
           hf upload "$SIMPLE_HF_REPO" output             --repo-type dataset --token "$HF_TOKEN" --path-in-repo data             --commit-message "Complete Simple English rebuild ($(date -u +%Y-%m-%d))"
 
       - name: Publish provenance card to Hugging Face
         if: ${{ env.HF_TOKEN != '' }}
         run: |
-          sed             -e "s#__LANG_NAME__#Simple English#g"             -e "s#__LANG_CODE__#simple#g"             -e "s#__SOURCE_URL__#$SIMPLE_SOURCE_URL#g"             -e "s#__REPO_URL__#$SOURCE_REPO_URL#g"             -e "s#__UPSTREAM_URL__#$UPSTREAM_REPO_URL#g"             config/hf-dataset-card.md > README.md
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          e = os.environ
+          s = Path("config/hf-dataset-card.md").read_text()
+          for key, value in {
+              "__LANG_PROJECT__": "simplewiki",
+              "__LANG_NAME__": "Simple English",
+              "__LANG_CODE__": "simple",
+              "__HF_REPO__": e["SIMPLE_HF_REPO"],
+              "__SOURCE_URL__": e["SIMPLE_SOURCE_URL"],
+              "__REPO_URL__": e["SOURCE_REPO_URL"],
+              "__UPSTREAM_URL__": e["UPSTREAM_REPO_URL"],
+          }.items():
+              s = s.replace(key, value)
+          Path("README.md").write_text(s)
+          PY
           hf upload "$SIMPLE_HF_REPO" README.md README.md             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Credit source repositories for Simple English Wikipedia"
 
       - name: Free runner disk

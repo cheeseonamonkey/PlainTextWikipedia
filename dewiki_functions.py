@@ -53,8 +53,10 @@ def clean_wikitext(source: str) -> str:
 def iter_articles(path: Path) -> Iterator[Article]:
     """Yield current main-namespace, non-redirect articles from one XML file."""
     with _open_dump(path) as stream:
-        for _, page in ET.iterparse(stream, events=("end",)):
-            if page.tag.rsplit("}", 1)[-1] != "page":
+        events = ET.iterparse(stream, events=("start", "end"))
+        _, root = next(events)
+        for event, page in events:
+            if event != "end" or page.tag.rsplit("}", 1)[-1] != "page":
                 continue
             try:
                 if _child_text(page, "ns") != "0":
@@ -75,6 +77,7 @@ def iter_articles(path: Path) -> Iterator[Article]:
                     yield Article(int(page_id_text), title, text)
             finally:
                 page.clear()
+                root.clear()  # Release completed siblings in very large dump files.
 
 
 def write_plaintext_shards(
@@ -82,7 +85,7 @@ def write_plaintext_shards(
     output_dir: Path,
     shard_count: int = 1,
     prefix: str = "wiki",
-    compression_level: int = 9,
+    compression_level: int = 6,
     output_name: str | None = None,
 ) -> int:
     """Write compressed plaintext, optionally combining several page-range files."""
