@@ -1,0 +1,6 @@
+{
+  "title": "Plaintext Wikipedia (English)",
+  "id": "ffatty/plaintext-wikipedia-full-english",
+  "description": "Compressed plaintext English Wikipedia articles. Each article title precedes its cleaned text; files are independently compressed logical shards.",
+  "licenses": [{"name": "CC-BY-SA-3.0"}]
+}
