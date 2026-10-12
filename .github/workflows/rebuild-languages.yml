@@ -1,0 +1,94 @@
+name: Build all Wikipedia languages
+run-name: Rebuild 10 Wikipedia editions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/rebuild-languages.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rebuild-all-wikipedia
+  cancel-in-progress: false
+
+jobs:
+  simple:
+    name: Simple English
+    uses: ./.github/workflows/rebuild-simple.yml
+    secrets: inherit
+  no:
+    needs: simple
+    if: ${{ always() && !cancelled() }}
+    name: nowiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: nowiki
+    secrets: inherit
+  es:
+    needs: no
+    if: ${{ always() && !cancelled() }}
+    name: eswiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: eswiki
+    secrets: inherit
+  fr:
+    needs: es
+    if: ${{ always() && !cancelled() }}
+    name: frwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: frwiki
+    secrets: inherit
+  de:
+    needs: fr
+    if: ${{ always() && !cancelled() }}
+    name: dewiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: dewiki
+    secrets: inherit
+  it:
+    needs: de
+    if: ${{ always() && !cancelled() }}
+    name: itwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: itwiki
+    secrets: inherit
+  pt:
+    needs: it
+    if: ${{ always() && !cancelled() }}
+    name: ptwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: ptwiki
+    secrets: inherit
+  ru:
+    needs: pt
+    if: ${{ always() && !cancelled() }}
+    name: ruwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: ruwiki
+    secrets: inherit
+  zh:
+    needs: ru
+    if: ${{ always() && !cancelled() }}
+    name: zhwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: zhwiki
+    secrets: inherit
+  en:
+    needs: zh
+    if: ${{ always() && !cancelled() }}
+    name: enwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: enwiki
+    secrets: inherit
