@@ -1,0 +1,123 @@
+name: Rescue Wikipedia shard artifacts
+run-name: Preserve generated Wikipedia shards on Hugging Face
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/rescue-artifacts.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rescue:
+    name: Save ${{ matrix.code }} generated shards
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - {code: eswiki, lang: spanish, name: Spanish}
+          - {code: dewiki, lang: german, name: German}
+          - {code: itwiki, lang: italian, name: Italian}
+          - {code: ruwiki, lang: russian, name: Russian}
+          - {code: enwiki, lang: english, name: English}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      LANGUAGE: ${{ matrix.code }}
+      LANG_NAME: ${{ matrix.name }}
+      HF_REPO: ffatty/plaintext-wikipedia-full-${{ matrix.lang }}
+      OLD_RUN: "38275908478"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect available shard list
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$HF_TOKEN" ]] || { echo "::error::HF_TOKEN is unavailable"; exit 1; }
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$OLD_RUN/artifacts?per_page=100" \
+            --jq '.artifacts[].name' | grep -E "^full-$LANGUAGE-[0-9]+$" | sort -V > /tmp/shards.txt
+          test -s /tmp/shards.txt
+          echo "Rescuing $(wc -l </tmp/shards.txt) shard artifacts for $LANGUAGE"
+          cat /tmp/shards.txt
+      - name: Install Hugging Face uploader
+        run: python -m pip install huggingface_hub
+      - name: Create dataset repository
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          e = os.environ
+          HfApi(token=e["HF_TOKEN"]).create_repo(
+              repo_id=e["HF_REPO"], repo_type="dataset", exist_ok=True)
+          PY
+      - name: Transfer each artifact directly to Hugging Face
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r artifact; do
+            mkdir -p /tmp/shard
+            gh run download "$OLD_RUN" -R "$GITHUB_REPOSITORY" \
+              --name "$artifact" --dir /tmp/shard
+            python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+
+          e = os.environ
+          files = list(Path("/tmp/shard").rglob("*.txt.gz"))
+          if len(files) != 1:
+              raise RuntimeError(f"Expected one compressed shard, got: {files}")
+          f = files[0]
+          print(f"Preserving {f.name} ({f.stat().st_size:,} bytes)", flush=True)
+          HfApi(token=e["HF_TOKEN"]).upload_file(
+              path_or_fileobj=str(f),
+              path_in_repo=f"data/{f.name}",
+              repo_id=e["HF_REPO"],
+              repo_type="dataset",
+              commit_message=f"Rescue {f.name} from GitHub Actions")
+          print(f"Stored data/{f.name}", flush=True)
+          PY
+            rm -rf /tmp/shard
+          done < /tmp/shards.txt
+      - name: Publish accurate dataset card
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          e = os.environ
+          api = HfApi(token=e["HF_TOKEN"])
+          available = list(Path("/tmp/shards.txt").read_text().splitlines())
+          count = len(available)
+          status = (f"**RECOVERY IN PROGRESS: {count} of 10 expected shards are available. "
+                    "Missing shards must be rebuilt before the complete dataset can be used.**\n\n"
+                    if count < 10 else "**All 10 expected shards were recovered.**\n\n")
+          card = Path("config/hf-dataset-card.md").read_text()
+          for key, value in {
+              "__LANG_PROJECT__": e["LANGUAGE"],
+              "__LANG_NAME__": e["LANG_NAME"],
+              "__LANG_CODE__": e["LANGUAGE"].removesuffix("wiki"),
+              "__HF_REPO__": e["HF_REPO"],
+              "__SOURCE_URL__": f'https://dumps.wikimedia.org/{e["LANGUAGE"]}/latest',
+              "__REPO_URL__": "https://github.com/cheeseonamonkey/PlainTextWikipedia",
+              "__UPSTREAM_URL__": "https://github.com/daveshap/PlainTextWikipedia",
+          }.items():
+              card = card.replace(key, value)
+          card = card.replace("## Format", status + "## Format", 1)
+          Path("/tmp/README.md").write_text(card)
+          api.upload_file(
+              path_or_fileobj="/tmp/README.md", path_in_repo="README.md",
+              repo_id=e["HF_REPO"], repo_type="dataset",
+              commit_message=f'Update {e["LANG_NAME"]} recovery status ({count}/10 shards)')
+          print(f'https://huggingface.co/datasets/{e["HF_REPO"]} ({count}/10)')
+          PY
