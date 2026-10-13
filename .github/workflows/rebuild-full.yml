@@ -107,7 +107,7 @@ jobs:
 
   publish:
     needs: [plan, build]
-    if: ${{ needs.build.result == 'success' }}
+    if: ${{ always() && !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
@@ -150,16 +150,66 @@ jobs:
           pattern: full-${{ inputs.language }}-*
           merge-multiple: true
           path: publish
-      - name: Validate complete dataset
+      - name: Inspect available shards and write manifest
+        id: inspect
         shell: bash
         run: |
           set -euo pipefail
-          count="$(find publish -maxdepth 1 -type f -name "$LANGUAGE"'_*.txt.gz' | wc -l)"
-          test "$count" -eq "$COUNT"
-          for file in publish/*.txt.gz; do gzip -t "$file"; done
-          echo "Validated $count compressed shards"
+          python - <<'PY'
+          import gzip, json, os, re
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          e = os.environ
+          root = Path("publish")
+          root.mkdir(exist_ok=True)
+          expected = int(e["COUNT"])
+          pattern = re.compile(r"^" + re.escape(e["LANGUAGE"]) + rf"_(\d{{2}})_of_{expected:02d}\.txt\.gz$")
+          present = set()
+          for file in sorted(root.glob("*.txt.gz")):
+              match = pattern.fullmatch(file.name)
+              if match is None or int(match.group(1)) not in range(1, expected + 1):
+                  print(f"::warning::Ignoring unexpected artifact {file.name}", flush=True)
+                  file.unlink()
+                  continue
+              try:
+                  with gzip.open(file, "rb") as stream:
+                      while stream.read(8 * 1024 * 1024):
+                          pass
+              except (OSError, EOFError) as exc:
+                  print(f"::warning::Discarding corrupt shard {file.name}: {exc}", flush=True)
+                  file.unlink()
+                  continue
+              present.add(int(match.group(1)))
+
+          present = sorted(present)
+          missing = sorted(set(range(1, expected + 1)) - set(present))
+          manifest = {
+              "language": e["LANGUAGE"],
+              "build_run": e["GITHUB_RUN_ID"],
+              "generated_utc": datetime.now(timezone.utc).isoformat(),
+              "expected_shards": expected,
+              "published_shards": len(present),
+              "present_shards": present,
+              "missing_shards": missing,
+              "complete": not missing,
+          }
+          (root / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          with open(e["GITHUB_OUTPUT"], "a") as output:
+              print(f"available={'true' if present else 'false'}", file=output)
+              print(f"complete={'true' if not missing else 'false'}", file=output)
+          summary = (f"{e['LANGUAGE']}: {len(present)}/{expected} valid shards. "
+                     f"Missing: {missing if missing else 'none'}.")
+          print(summary, flush=True)
+          with open(e["GITHUB_STEP_SUMMARY"], "a") as output:
+              print(summary, file=output)
+          if not present:
+              print("::warning::No valid shard artifacts to publish", flush=True)
+          PY
       - name: Publish to Hugging Face
-        if: ${{ env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
+        id: hf_publish
+        continue-on-error: true
+        if: ${{ steps.inspect.outputs.available == 'true' && env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -168,6 +218,7 @@ jobs:
           import os
           from pathlib import Path
           from huggingface_hub import HfApi
+          import json
           e = os.environ
           api = HfApi(token=e["HF_TOKEN"])
           repo = e["FULL_HF_REPO"]
@@ -184,24 +235,42 @@ jobs:
           }
           for token, value in replacements.items():
               card = card.replace(token, value)
+          manifest = json.loads(Path("publish/build-manifest.json").read_text())
+          n = manifest["published_shards"]
+          expected = manifest["expected_shards"]
+          missing = manifest["missing_shards"]
+          status = ("COMPLETE" if manifest["complete"] else "PARTIAL")
+          warning = (f"**Build status: {status} — {n}/{expected} shards.** "
+                     + (f"Missing shard numbers: {missing}. The dataset is incomplete."
+                        if missing else "All planned shards are present.")
+                     + "\n\n")
+          card = card.replace("## Format", warning + "## Format", 1)
           Path("publish/README.md").write_text(card, encoding="utf-8")
           api.upload_folder(repo_id=repo, repo_type="dataset",
                             folder_path="publish", path_in_repo="data",
-                            allow_patterns="*.txt.gz",
-                            commit_message=f'Rebuild {e["LANG_NAME"]} Wikipedia shards')
+                            allow_patterns=["*.txt.gz", "build-manifest.json"],
+                            delete_patterns="*.txt.gz",
+                            commit_message=f'Rebuild {e["LANG_NAME"]} Wikipedia shards ({n}/{expected})')
           api.upload_file(repo_id=repo, repo_type="dataset",
                           path_or_fileobj="publish/README.md", path_in_repo="README.md",
                           commit_message=f'Update {e["LANG_NAME"]} dataset card')
           print(f"https://huggingface.co/datasets/{repo}")
           PY
       - name: Publish to Kaggle
-        if: ${{ env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
+        id: kaggle_publish
+        continue-on-error: true
+        if: ${{ always() && steps.inspect.outputs.available == 'true' && env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
         shell: bash
-        env:
-          KAGGLE_API_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
         run: |
           set -euo pipefail
           python -m pip install kaggle
+          if [[ "$KAGGLE_TOKEN" == \{* ]]; then
+            mkdir -p "$HOME/.kaggle"
+            printf '%s' "$KAGGLE_TOKEN" > "$HOME/.kaggle/kaggle.json"
+            chmod 600 "$HOME/.kaggle/kaggle.json"
+          else
+            export KAGGLE_API_TOKEN="$KAGGLE_TOKEN"
+          fi
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -212,6 +281,14 @@ jobs:
           meta["description"] = meta["description"].replace("English", e["LANG_NAME"])
           meta["description"] = meta["description"].replace("__REPO_URL__", e["SOURCE_REPO_URL"])
           meta["description"] = meta["description"].replace("__UPSTREAM_URL__", e["UPSTREAM_REPO_URL"])
+          manifest = json.loads(Path("publish/build-manifest.json").read_text())
+          n, expected = manifest["published_shards"], manifest["expected_shards"]
+          meta["description"] += (
+              f"\n\nBuild status: {'complete' if manifest['complete'] else 'PARTIAL'} "
+              f"({n}/{expected} shards). "
+              f"Missing shard numbers: {manifest['missing_shards']}. "
+              "See build-manifest.json for exact coverage."
+          )
           Path("publish/dataset-metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
           PY
           if kaggle datasets files -d "$FULL_KAGGLE_DATASET" >/dev/null 2>&1; then
@@ -220,6 +297,18 @@ jobs:
             kaggle datasets create -p publish --public --dir-mode skip
           fi
           echo "https://www.kaggle.com/datasets/$FULL_KAGGLE_DATASET"
+      - name: Report publishing errors
+        if: ${{ always() && steps.inspect.outputs.available == 'true' }}
+        shell: bash
+        env:
+          HF_RESULT: ${{ steps.hf_publish.outcome }}
+          KAGGLE_RESULT: ${{ steps.kaggle_publish.outcome }}
+        run: |
+          echo "HF publication: $HF_RESULT; Kaggle publication: $KAGGLE_RESULT"
+          if [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
+            echo "::error::At least one publishing destination failed"
+            exit 1
+          fi
       - name: Missing publisher warning
         if: ${{ env.HF_TOKEN == '' || env.KAGGLE_TOKEN == '' }}
         shell: bash
