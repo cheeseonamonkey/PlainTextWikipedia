@@ -1,0 +1,152 @@
+name: Retry missing Wikipedia shards
+run-name: Rebuild six failed shards and rescue English shard 6
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/retry-missing-shards.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  retry:
+    name: Repair ${{ matrix.language }} shard ${{ matrix.shard }}
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - {language: eswiki, slug: spanish, shard: 8}
+          - {language: dewiki, slug: german, shard: 3}
+          - {language: dewiki, slug: german, shard: 4}
+          - {language: itwiki, slug: italian, shard: 10}
+          - {language: ruwiki, slug: russian, shard: 1}
+          - {language: enwiki, slug: english, shard: 2}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      LANGUAGE: ${{ matrix.language }}
+      SHARD: ${{ matrix.shard }}
+      COUNT: "10"
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_REPO: ffatty/plaintext-wikipedia-full-${{ matrix.slug }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check if shard was already recovered
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install huggingface_hub
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          e = os.environ
+          name = f'{e["LANGUAGE"]}_{int(e["SHARD"]):02d}_of_10.txt.gz'
+          files = HfApi(token=e.get("HF_TOKEN")).list_repo_files(e["HF_REPO"], repo_type="dataset")
+          found = f"data/{name}" in files
+          with open(e["GITHUB_OUTPUT"], "a") as output:
+              print(f"skip={'true' if found else 'false'}", file=output)
+          print(f"{name}: {'already stored in HF, no reprocessing' if found else 'missing, rebuilding'}")
+          PY
+      - name: Install converter
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        run: python -m pip install -r REQUIREMENTS.TXT
+      - name: Download assigned Wikimedia page-range files
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/download_page_ranges.py \
+            --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
+            --language "$LANGUAGE" --shard "$((SHARD - 1))" \
+            --shard-count "$COUNT" --output-dir ranges > ranges.txt
+          test -s ranges.txt
+      - name: Convert and validate with per-article timeout
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dumps < ranges.txt
+          file="$(printf '%s_%02d_of_%02d.txt.gz' "$LANGUAGE" "$SHARD" "$COUNT")"
+          python wiki_to_text.py "${dumps[@]}" output --output-name "$file"
+          gzip -t "output/$file"
+      - name: Preserve repaired gzip archive on GitHub
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovered-${{ matrix.language }}-${{ matrix.shard }}
+          path: output/*.txt.gz
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+      - name: Publish repaired shard to Hugging Face
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          e = os.environ
+          filename = f'{e["LANGUAGE"]}_{int(e["SHARD"]):02d}_of_10.txt.gz'
+          f = Path("output") / filename
+          HfApi(token=e["HF_TOKEN"]).upload_file(
+              path_or_fileobj=str(f), path_in_repo=f"data/{filename}",
+              repo_id=e["HF_REPO"], repo_type="dataset",
+              commit_message=f"Recover missing {filename}")
+          print(f'PUBLISHED https://huggingface.co/datasets/{e["HF_REPO"]}/tree/main/data')
+          PY
+      - name: Clean runner files
+        if: always()
+        run: rm -rf output ranges ranges.txt
+
+  rescue-english-6:
+    name: Preserve previously completed English shard 6
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_REPO: ffatty/plaintext-wikipedia-full-english
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Hugging Face uploader
+        run: python -m pip install huggingface_hub
+      - name: Check English shard 6
+        id: check
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          files = HfApi(token=os.environ["HF_TOKEN"]).list_repo_files(
+              os.environ["HF_REPO"], repo_type="dataset")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print("skip=" + ("true" if "data/enwiki_06_of_10.txt.gz" in files else "false"), file=out)
+          PY
+      - name: Download English shard 6 from original build
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          gh run download 38275908478 --repo "$GITHUB_REPOSITORY" \
+            --name full-enwiki-6 --dir recovered
+      - name: Upload English shard 6 to Hugging Face
+        if: ${{ steps.check.outputs.skip != 'true' }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          f = Path("recovered/enwiki_06_of_10.txt.gz")
+          assert f.exists() and f.stat().st_size > 0
+          HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+              path_or_fileobj=str(f), path_in_repo="data/" + f.name,
+              repo_id=os.environ["HF_REPO"], repo_type="dataset",
+              commit_message="Preserve finished English Wikipedia shard 6")
+          print("Preserved " + f.name)
+          PY
