@@ -70,7 +70,7 @@ The following **42 additional editions** are configured for the first import. Th
 
 The import batch is defined in [`bootstrap-additional-languages.yml`](.github/workflows/bootstrap-additional-languages.yml) and [`additional-languages.json`](config/additional-languages.json). It reuses the existing maximum of 16 initial shards, a/b recursive recovery, and post-publication artifact cleanup. Cebuano is included; its millions of mostly bot-created articles may be repetitive compared with human-written corpora.
 
-**Not included as active Wikimedia Wikipedia dumps: Klingon and Cree (closed) and Taa/ǃXóõ (no identified active edition). **Tigre does have a small active Wikipedia (`tigwiki`) and is included in the new language-diversity batch; Tigrinya (`tiwiki`) is a separate edition.** Scots uses `scowiki`, and “Pidgin” includes both Tok Pisin and Nigerian Pidgin.
+**Not included as active Wikipedia editions:** Klingon and Cree (closed), and Taa/ǃXóõ (no identified active edition). **Tigre (`tigwiki`) is active** and included in the new batch; Tigrinya (`tiwiki`) is a separate language. Scots uses `scowiki`, and “Pidgin” includes both Tok Pisin and Nigerian Pidgin.
 
 ## Hebrew and language-diversity import batch
 
