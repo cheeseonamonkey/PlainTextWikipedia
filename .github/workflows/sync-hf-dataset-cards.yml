@@ -61,8 +61,11 @@ jobs:
               print(f"Making the existing dataset public: {repo}", flush=True)
               api.update_repo_settings(repo_id=repo, repo_type="dataset", private=False)
           files = api.list_repo_files(repo_id=repo, repo_type="dataset")
-          shards = sorted(x for x in files if x.startswith("data/") and x.endswith(".txt.gz"))
+          all_shards = sorted(x for x in files if x.startswith("data/") and x.endswith(".txt.gz"))
           expected = int(e["EXPECTED"])
+          suffix = 10 if e["WIKI"] == "itwiki" else expected
+          shards = [x for x in all_shards if x.endswith(f"_of_{suffix:02d}.txt.gz")]
+          legacy_count = len(all_shards) - len(shards)
           if len(shards) > expected:
               raise RuntimeError(f"Unexpected shard count {len(shards)} > {expected}: {shards}")
           card = Path("config/hf-dataset-card.md").read_text()
@@ -84,6 +87,9 @@ jobs:
           else:
               note += ("All expected output files are present. "
                        "File-count completion does not independently guarantee article-range coverage.\n\n")
+          if legacy_count:
+              note += (f"Note: {legacy_count} archived or older shard files remain in the same "
+                       "repository under different names. They are not part of the current release.\n\n")
           if e["WIKI"] == "itwiki":
               note += ("This recovery contains 9 nonempty output files from the 10-range "
                        "October dump; a historical stale-range overlap is being corrected. "
