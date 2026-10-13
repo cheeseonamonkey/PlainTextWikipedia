@@ -23,7 +23,13 @@ def main() -> None:
         "--output-name",
         help="exact output filename; valid when --shards is 1",
     )
+    parser.add_argument("--min-page-id", type=int, help="Inclusive minimum page ID for recovery splits")
+    parser.add_argument("--max-page-id", type=int, help="Inclusive maximum page ID for recovery splits")
+    parser.add_argument("--allow-empty", action="store_true", help="Allow an empty page-ID segment")
     args = parser.parse_args()
+    if (args.min_page_id is not None and args.max_page_id is not None
+            and args.min_page_id > args.max_page_id):
+        parser.error("--min-page-id cannot exceed --max-page-id")
 
     count = write_plaintext_shards(
         args.dumps,
@@ -31,6 +37,9 @@ def main() -> None:
         shard_count=args.shards,
         prefix=args.prefix,
         output_name=args.output_name,
+        min_page_id=args.min_page_id,
+        max_page_id=args.max_page_id,
+        allow_empty=args.allow_empty,
     )
     print(f"Wrote {count:,} articles to {args.output}")
 
