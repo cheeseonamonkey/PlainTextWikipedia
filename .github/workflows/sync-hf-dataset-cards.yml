@@ -25,14 +25,14 @@ jobs:
       matrix:
         include:
           - {language: Simple English, wiki: simplewiki, slug: plain-text-wikipedia-simpleenglish, lang: en, expected: 1}
-          - {language: Norwegian, wiki: nowiki, slug: plaintext-wikipedia-full-norwegian, lang: no, expected: 3}
-          - {language: Spanish, wiki: eswiki, slug: plaintext-wikipedia-full-spanish, lang: es, expected: 10}
+          - {language: Norwegian, wiki: nowiki, slug: plaintext-wikipedia-full-norwegian, lang: no, expected: 2}
+          - {language: Spanish, wiki: eswiki, slug: plaintext-wikipedia-full-spanish, lang: es, expected: 9}
           - {language: French, wiki: frwiki, slug: plaintext-wikipedia-full-french, lang: fr, expected: 10}
           - {language: German, wiki: dewiki, slug: plaintext-wikipedia-full-german, lang: de, expected: 10}
           - {language: Italian, wiki: itwiki, slug: plaintext-wikipedia-full-italian, lang: it, expected: 9}
           - {language: Portuguese, wiki: ptwiki, slug: plaintext-wikipedia-full-portuguese, lang: pt, expected: 9}
           - {language: Russian, wiki: ruwiki, slug: plaintext-wikipedia-full-russian, lang: ru, expected: 10}
-          - {language: Chinese, wiki: zhwiki, slug: plaintext-wikipedia-full-chinese, lang: zh, expected: 10}
+          - {language: Chinese, wiki: zhwiki, slug: plaintext-wikipedia-full-chinese, lang: zh, expected: 9}
           - {language: English, wiki: enwiki, slug: plaintext-wikipedia-full-english, lang: en, expected: 10}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -63,7 +63,7 @@ jobs:
           files = api.list_repo_files(repo_id=repo, repo_type="dataset")
           all_shards = sorted(x for x in files if x.startswith("data/") and x.endswith(".txt.gz"))
           expected = int(e["EXPECTED"])
-          suffix = 10 if e["WIKI"] == "itwiki" else expected
+          suffix = 10 if e["WIKI"] in ("itwiki", "eswiki", "zhwiki") else (3 if e["WIKI"] == "nowiki" else expected)
           shards = [x for x in all_shards if x.endswith(f"_of_{suffix:02d}.txt.gz")]
           legacy_count = len(all_shards) - len(shards)
           if len(shards) > expected:
@@ -90,10 +90,11 @@ jobs:
           if legacy_count:
               note += (f"Note: {legacy_count} archived or older shard files remain in the same "
                        "repository under different names. They are not part of the current release.\n\n")
-          if e["WIKI"] == "itwiki":
-              note += ("This recovery contains 9 nonempty output files from the 10-range "
-                       "October dump; a historical stale-range overlap is being corrected. "
-                       "The filenames retain their original of_10 suffix.\n\n")
+          if e["WIKI"] in ("itwiki", "eswiki", "zhwiki", "nowiki"):
+              note += ("This recovery retains the original output numbering. Obsolete September "
+                       "ranges have been excluded; every retained output is assigned an October "
+                       "Wikimedia page range. Some output indices are intentionally absent because "
+                       "the original partition included now-removed stale ranges.\n\n")
           card = card.replace("## Format", note + "## Format", 1)
           Path("README-publication.md").write_text(card, encoding="utf-8")
           api.upload_file(repo_id=repo, repo_type="dataset",
