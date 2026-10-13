@@ -63,8 +63,8 @@ def page_range_catalog(
         # page-range partitioning.
         single = f"{language}-latest-pages-articles.xml.bz2"
         single_pattern = re.compile(
-            rf'<a\\s+href="{re.escape(single)}"[^>]*>[^<]*</a>\\s+'
-            r'(\\d{2}-[A-Za-z]{3}-\\d{4})\\s+\\d{2}:\\d{2}\\s+(\\d+)'
+            rf'<a\s+href="{re.escape(single)}"[^>]*>[^<]*</a>\s+'
+            r'(\d{2}-[A-Za-z]{3}-\d{4})\s+\d{2}:\d{2}\s+(\d+)'
         )
         match = single_pattern.search(listing)
         if match and int(match.group(2)) >= 4096:
