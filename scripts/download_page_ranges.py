@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from datetime import datetime
 import re
 import sys
@@ -124,6 +125,10 @@ def main() -> None:
         help="Keep old round-robin shard positions, but exclude outdated dump files",
     )
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--allow-partial", action="store_true",
+                        help="Save successful downloads even when other source ranges 404")
+    parser.add_argument("--failures-file", type=Path,
+                        help="Write failed source ranges as JSON")
     args = parser.parse_args()
 
     catalog = page_range_catalog(args.base_url, args.language)
@@ -156,13 +161,28 @@ def main() -> None:
         raise RuntimeError("No current dump files assigned to this shard")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    for _, _, filename in selected:
+    failures = []
+    successes = 0
+    for start, end, filename in selected:
         destination = args.output_dir / filename
-        download(f"{args.base_url.rstrip('/')}/{filename}", destination)
+        url = f"{args.base_url.rstrip('/')}/{filename}"
+        try:
+            download(url, destination)
+        except Exception as exc:
+            if not args.allow_partial:
+                raise
+            failures.append({"file": filename, "start_page_id": start,
+                             "end_page_id": end, "url": url, "error": str(exc)})
+            print(f"WARNING: Failed to download {filename}: {exc}", file=sys.stderr)
+            continue
         print(destination.resolve())
+        successes += 1
+    if args.failures_file:
+        args.failures_file.write_text(json.dumps(failures, indent=2) + "\n")
     print(
-        f"Selected {len(selected)}/{len(current)} current page-range files for "
-        f"shard {args.shard + 1}/{args.shard_count}", file=sys.stderr
+        f"Selected {len(selected)}/{len(current)} current page-range files, "
+        f"downloaded {successes}, failed {len(failures)} for shard "
+        f"{args.shard + 1}/{args.shard_count}", file=sys.stderr
     )
 
 
