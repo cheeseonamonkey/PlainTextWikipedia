@@ -6,10 +6,10 @@ from scripts.language_info import metadata
 
 
 class AdditionalLanguageTests(unittest.TestCase):
-    def test_registry_has_42_distinct_projects_and_slugs(self):
+    def test_registry_has_distinct_projects_and_slugs(self):
         path = Path(__file__).resolve().parents[1] / "config" / "additional-languages.json"
         rows = json.loads(path.read_text(encoding="utf-8"))["languages"]
-        self.assertEqual(len(rows), 42)
+        self.assertGreaterEqual(len(rows), 115)
         self.assertEqual(len({row["project"] for row in rows}), len(rows))
         self.assertEqual(len({row["slug"] for row in rows}), len(rows))
         for row in rows:
@@ -21,6 +21,13 @@ class AdditionalLanguageTests(unittest.TestCase):
         self.assertEqual(metadata("tokwiki"), ("Toki Pona", "toki-pona"))
         self.assertEqual(metadata("zh_classicalwiki"), ("Classical Chinese", "classical-chinese"))
         self.assertEqual(metadata("arcwiki"), ("Aramaic (Syriac)", "aramaic-syriac"))
+        self.assertEqual(metadata("hewiki"), ("Hebrew", "hebrew"))
+        self.assertEqual(metadata("hawiki"), ("Hausa", "hausa"))
+        self.assertEqual(metadata("hawwiki"), ("Hawaiian", "hawaiian"))
+        self.assertEqual(metadata("tigwiki"), ("Tigre", "tigre"))
+        self.assertEqual(metadata("tiwiki"), ("Tigrinya", "tigrinya"))
+        self.assertEqual(metadata("smnwiki"), ("Inari Sami", "inari-sami"))
+        self.assertEqual(metadata("atjwiki"), ("Atikamekw", "atikamekw"))
         with self.assertRaises(ValueError):
             metadata("tlhwiki")  # Closed Klingon Wikipedia
 
