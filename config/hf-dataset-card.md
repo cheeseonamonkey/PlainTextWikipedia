@@ -24,7 +24,9 @@ Next article body
 
 ```
 
-Shard files are named `__LANG_PROJECT___01_of_NN.txt.gz`, etc. They are raw text archives, **not** structured rows with `title` and `body` fields in the Hugging Face `datasets` API.
+Shard files are normally named `__LANG_PROJECT___01_of_NN.txt.gz`, etc. If one shard fails, recovery splits it into named halves like `__LANG_PROJECT___01a_of_NN.txt.gz` and `__LANG_PROJECT___01b_of_NN.txt.gz`; a failing half can split again (`01ba`, `01bb`, etc.). Only successful, non-overlapping leaves are published.
+
+The machine-readable coverage file `data/build-manifest.json` records which roots and subranges completed. Always check its `complete` flag before treating a dataset as exhaustive. These are raw text archives, **not** structured rows with `title` and `body` fields in the Hugging Face `datasets` API.
 
 ## Example: download and read
 

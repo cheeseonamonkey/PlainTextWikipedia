@@ -60,7 +60,7 @@ def _article_timeout(signum: int, frame: object) -> None:
     raise _ArticleConversionTimeout()
 
 
-def iter_articles(path: Path) -> Iterator[Article]:
+def iter_articles(path: Path, min_page_id: int | None = None, max_page_id: int | None = None) -> Iterator[Article]:
     """Yield current main-namespace, non-redirect articles from one XML file.
 
     Limit individual wikitext conversions on Linux runners so a malformed or
@@ -80,13 +80,20 @@ def iter_articles(path: Path) -> Iterator[Article]:
                         continue
                     if page.find("{*}redirect") is not None:
                         continue
+                    page_id_text = (_child_text(page, "id") or "").strip()
+                    if not page_id_text:
+                        continue
+                    page_id = int(page_id_text)
+                    if min_page_id is not None and page_id < min_page_id:
+                        continue
+                    if max_page_id is not None and page_id > max_page_id:
+                        continue
 
                     title = (_child_text(page, "title") or "").strip()
-                    page_id_text = (_child_text(page, "id") or "").strip()
                     revisions = page.findall("{*}revision")
                     revision = revisions[-1] if revisions else None
                     source = _child_text(revision, "text") if revision is not None else None
-                    if not title or not page_id_text or not source:
+                    if not title or not source:
                         continue
 
                     if has_timer:
@@ -103,7 +110,7 @@ def iter_articles(path: Path) -> Iterator[Article]:
                         if has_timer:
                             signal.setitimer(signal.ITIMER_REAL, 0)
                     if text:
-                        yield Article(int(page_id_text), title, text)
+                        yield Article(page_id, title, text)
                 finally:
                     page.clear()
                     root.clear()  # Release completed siblings in very large dump files.
@@ -120,6 +127,9 @@ def write_plaintext_shards(
     prefix: str = "wiki",
     compression_level: int = 6,
     output_name: str | None = None,
+    min_page_id: int | None = None,
+    max_page_id: int | None = None,
+    allow_empty: bool = False,
 ) -> int:
     """Write compressed plaintext, optionally combining several page-range files."""
     if shard_count < 1:
@@ -137,7 +147,7 @@ def write_plaintext_shards(
 
     try:
         for dump in dump_paths:
-            for article in iter_articles(dump):
+            for article in iter_articles(dump, min_page_id=min_page_id, max_page_id=max_page_id):
                 shard = (article.page_id - 1) % shard_count
                 if shard not in handles:
                     filename = output_name or f"{prefix}_{shard + 1:02d}_of_{shard_count:02d}.txt.gz"
@@ -155,5 +165,9 @@ def write_plaintext_shards(
             handle.close()
 
     if count == 0:
-        raise RuntimeError("No articles were written; refusing to publish an empty dataset.")
+        if not allow_empty:
+            raise RuntimeError("No articles were written; refusing to publish an empty dataset.")
+        filename = output_name or f"{prefix}_01_of_{shard_count:02d}.txt.gz"
+        with gzip.open(output_dir / filename, "wb", compresslevel=compression_level):
+            pass
     return count

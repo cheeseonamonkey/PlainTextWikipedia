@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   plan:
@@ -82,28 +83,30 @@ jobs:
           python scripts/download_page_ranges.py \
             --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
             --language "$LANGUAGE" --shard "$((SHARD - 1))" \
-            --shard-count "$COUNT" --output-dir ranges > ranges.txt
-          test -s ranges.txt
-      - name: Convert and validate
+            --shard-count "$COUNT" --output-dir ranges \
+            --allow-partial --failures-file download-failures.json > ranges.txt
+      - name: Convert with recursive a/b splitting on failure
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t dumps < ranges.txt
-          file="$(printf '%s_%02d_of_%02d.txt.gz' "$LANGUAGE" "$SHARD" "$COUNT")"
-          python wiki_to_text.py "${dumps[@]}" output --output-name "$file"
-          test -s "output/$file"
-          gzip -t "output/$file"
-      - name: Stage compressed shard
+          python scripts/convert_adaptive.py \
+            --language "$LANGUAGE" --shard "$SHARD" --count "$COUNT" \
+            --ranges-file ranges.txt --failures-file download-failures.json \
+            --max-depth 3 --max-seconds 19000 --output-dir output
+      - name: Stage successful leaves and split manifest even on failure
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: full-${{ inputs.language }}-${{ matrix.shard }}
-          path: output/*.txt.gz
+          path: |
+            output/*.txt.gz
+            output/*.manifest.json
           compression-level: 0
-          if-no-files-found: error
-          retention-days: 7
+          if-no-files-found: warn
+          retention-days: 1
       - name: Free runner disk
         if: always()
-        run: rm -rf output ranges ranges.txt
+        run: rm -rf output ranges ranges.txt download-failures.json
 
   publish:
     needs: [plan, build]
@@ -150,62 +153,15 @@ jobs:
           pattern: full-${{ inputs.language }}-*
           merge-multiple: true
           path: publish
-      - name: Inspect available shards and write manifest
+      - name: Inspect successful leaves, verify exact recovery coverage
         id: inspect
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import gzip, json, os, re
-          from datetime import datetime, timezone
-          from pathlib import Path
-
-          e = os.environ
-          root = Path("publish")
-          root.mkdir(exist_ok=True)
-          expected = int(e["COUNT"])
-          pattern = re.compile(r"^" + re.escape(e["LANGUAGE"]) + rf"_(\d{{2}})_of_{expected:02d}\.txt\.gz$")
-          present = set()
-          for file in sorted(root.glob("*.txt.gz")):
-              match = pattern.fullmatch(file.name)
-              if match is None or int(match.group(1)) not in range(1, expected + 1):
-                  print(f"::warning::Ignoring unexpected artifact {file.name}", flush=True)
-                  file.unlink()
-                  continue
-              try:
-                  with gzip.open(file, "rb") as stream:
-                      while stream.read(8 * 1024 * 1024):
-                          pass
-              except (OSError, EOFError) as exc:
-                  print(f"::warning::Discarding corrupt shard {file.name}: {exc}", flush=True)
-                  file.unlink()
-                  continue
-              present.add(int(match.group(1)))
-
-          present = sorted(present)
-          missing = sorted(set(range(1, expected + 1)) - set(present))
-          manifest = {
-              "language": e["LANGUAGE"],
-              "build_run": e["GITHUB_RUN_ID"],
-              "generated_utc": datetime.now(timezone.utc).isoformat(),
-              "expected_shards": expected,
-              "published_shards": len(present),
-              "present_shards": present,
-              "missing_shards": missing,
-              "complete": not missing,
-          }
-          (root / "build-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-          with open(e["GITHUB_OUTPUT"], "a") as output:
-              print(f"available={'true' if present else 'false'}", file=output)
-              print(f"complete={'true' if not missing else 'false'}", file=output)
-          summary = (f"{e['LANGUAGE']}: {len(present)}/{expected} valid shards. "
-                     f"Missing: {missing if missing else 'none'}.")
-          print(summary, flush=True)
-          with open(e["GITHUB_STEP_SUMMARY"], "a") as output:
-              print(summary, file=output)
-          if not present:
-              print("::warning::No valid shard artifacts to publish", flush=True)
-          PY
+          python scripts/inspect_adaptive.py \
+            --language "$LANGUAGE" --count "$COUNT" \
+            --directory publish --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
       - name: Publish to Hugging Face
         id: hf_publish
         continue-on-error: true
@@ -239,21 +195,54 @@ jobs:
           n = manifest["published_shards"]
           expected = manifest["expected_shards"]
           missing = manifest["missing_shards"]
+          incomplete = manifest["incomplete_shards"]
+          archives = manifest["published_archives"]
           status = ("COMPLETE" if manifest["complete"] else "PARTIAL")
-          warning = (f"**Build status: {status} — {n}/{expected} shards.** "
-                     + (f"Missing shard numbers: {missing}. The dataset is incomplete."
-                        if missing else "All planned shards are present.")
-                     + "\n\n")
+          warning = (
+              f"**Build status: {status} — {n}/{expected} root shards recovered "
+              f"({archives} leaf archives).** "
+              + (f"Missing roots: {missing}; incompletely recovered roots: {incomplete}. "
+                 "See data/build-manifest.json for failed subranges and coverage."
+                 if not manifest["complete"] else "All planned page ranges recovered.")
+              + "\n\n")
           card = card.replace("## Format", warning + "## Format", 1)
           Path("publish/README.md").write_text(card, encoding="utf-8")
-          api.upload_folder(repo_id=repo, repo_type="dataset",
-                            folder_path="publish", path_in_repo="data",
-                            allow_patterns=["*.txt.gz", "build-manifest.json"],
-                            delete_patterns="*.txt.gz",
-                            commit_message=f'Rebuild {e["LANG_NAME"]} Wikipedia shards ({n}/{expected})')
-          api.upload_file(repo_id=repo, repo_type="dataset",
-                          path_or_fileobj="publish/README.md", path_in_repo="README.md",
-                          commit_message=f'Update {e["LANG_NAME"]} dataset card')
+          # Upload small independent commits instead of one multi-GB commit.
+          # This also allows a transient 429/500/504 to retry one leaf only.
+          import time
+          def retry_upload(description, action):
+              for attempt in range(5):
+                  try:
+                      return action()
+                  except Exception as exc:
+                      if attempt == 4:
+                          raise
+                      delay = min(120, 10 * 2 ** attempt)
+                      print(f"Retrying {description} in {delay}s: {exc}", flush=True)
+                      time.sleep(delay)
+          current = sorted(Path("publish").glob("*.txt.gz"))
+          wanted = {f"data/{file.name}" for file in current}
+          existing = set(api.list_repo_files(repo, repo_type="dataset"))
+          for file in current:
+              retry_upload(file.name, lambda file=file: api.upload_file(
+                  repo_id=repo, repo_type="dataset",
+                  path_or_fileobj=str(file), path_in_repo=f"data/{file.name}",
+                  commit_message=f'Update {e["LANG_NAME"]} leaf {file.name}'))
+          retry_upload("build-manifest.json", lambda: api.upload_file(
+              repo_id=repo, repo_type="dataset",
+              path_or_fileobj="publish/build-manifest.json",
+              path_in_repo="data/build-manifest.json",
+              commit_message=f'Publish coverage for {e["LANG_NAME"]} ({n}/{expected})'))
+          retry_upload("README.md", lambda: api.upload_file(
+              repo_id=repo, repo_type="dataset",
+              path_or_fileobj="publish/README.md", path_in_repo="README.md",
+              commit_message=f'Update {e["LANG_NAME"]} dataset card'))
+          for obsolete in sorted(existing - wanted):
+              if obsolete.startswith("data/") and obsolete.endswith(".txt.gz"):
+                  retry_upload(f"delete {obsolete}", lambda obsolete=obsolete: api.delete_file(
+                      repo_id=repo, repo_type="dataset", path_in_repo=obsolete,
+                      commit_message=f"Remove obsolete {obsolete}"))
+          print(f"Uploaded {len(current)} leaves; removed obsolete compressed archives")
           print(f"https://huggingface.co/datasets/{repo}")
           PY
       - name: Publish to Kaggle
@@ -285,8 +274,9 @@ jobs:
           n, expected = manifest["published_shards"], manifest["expected_shards"]
           meta["description"] += (
               f"\n\nBuild status: {'complete' if manifest['complete'] else 'PARTIAL'} "
-              f"({n}/{expected} shards). "
-              f"Missing shard numbers: {manifest['missing_shards']}. "
+              f"({n}/{expected} root shards; {manifest['published_archives']} leaf files). "
+              f"Missing roots: {manifest['missing_shards']}; "
+              f"incomplete roots: {manifest['incomplete_shards']}. "
               "See build-manifest.json for exact coverage."
           )
           Path("publish/dataset-metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
@@ -309,6 +299,22 @@ jobs:
             echo "::error::At least one publishing destination failed"
             exit 1
           fi
+      - name: Delete run shard artifacts after confirmed publication
+        if: ${{ always() && (steps.hf_publish.outcome == 'success' || steps.kaggle_publish.outcome == 'success') }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Only delete this exact run's matching shard artifacts after one publisher succeeds.
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+            --jq '.artifacts[] | [.id, .name] | @tsv' \
+            | while read -r id name; do
+                if [[ "$name" =~ ^full-${LANGUAGE}-[0-9]+$ ]]; then
+                  gh api --method DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+                  echo "Deleted published artifact $name ($id)"
+                fi
+              done
       - name: Missing publisher warning
         if: ${{ env.HF_TOKEN == '' || env.KAGGLE_TOKEN == '' }}
         shell: bash
