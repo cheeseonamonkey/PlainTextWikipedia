@@ -161,7 +161,7 @@ def main() -> None:
         download(f"{args.base_url.rstrip('/')}/{filename}", destination)
         print(destination.resolve())
     print(
-        f"Selected {len(selected)}/{len(ranges)} unique page-range files for "
+        f"Selected {len(selected)}/{len(current)} current page-range files for "
         f"shard {args.shard + 1}/{args.shard_count}", file=sys.stderr
     )
 
