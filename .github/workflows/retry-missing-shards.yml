@@ -1,5 +1,5 @@
 name: Retry missing Wikipedia shards
-run-name: Rebuild six failed shards and rescue English shard 6
+run-name: Repair obsolete October dump page-ranges and missing shards
 
 on:
   push:
@@ -20,18 +20,20 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - {language: eswiki, slug: spanish, shard: 8}
-          - {language: dewiki, slug: german, shard: 3}
-          - {language: dewiki, slug: german, shard: 4}
-          - {language: itwiki, slug: italian, shard: 10}
-          - {language: ruwiki, slug: russian, shard: 1}
-          - {language: enwiki, slug: english, shard: 2}
+          - {language: dewiki, slug: german, shard: 3, force: false}
+          - {language: dewiki, slug: german, shard: 4, force: false}
+          - {language: dewiki, slug: german, shard: 5, force: true}
+          - {language: itwiki, slug: italian, shard: 1, force: true}
+          - {language: ruwiki, slug: russian, shard: 1, force: false}
+          - {language: ruwiki, slug: russian, shard: 2, force: true}
+          - {language: enwiki, slug: english, shard: 2, force: false}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
       LANGUAGE: ${{ matrix.language }}
       SHARD: ${{ matrix.shard }}
       COUNT: "10"
+      FORCE_REBUILD: ${{ matrix.force }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_REPO: ffatty/plaintext-wikipedia-full-${{ matrix.slug }}
     steps:
@@ -48,7 +50,7 @@ jobs:
           e = os.environ
           name = f'{e["LANGUAGE"]}_{int(e["SHARD"]):02d}_of_10.txt.gz'
           files = HfApi(token=e.get("HF_TOKEN")).list_repo_files(e["HF_REPO"], repo_type="dataset")
-          found = f"data/{name}" in files
+          found = f"data/{name}" in files and e.get("FORCE_REBUILD") != "true"
           with open(e["GITHUB_OUTPUT"], "a") as output:
               print(f"skip={'true' if found else 'false'}", file=output)
           print(f"{name}: {'already stored in HF, no reprocessing' if found else 'missing, rebuilding'}")
@@ -64,7 +66,7 @@ jobs:
           python scripts/download_page_ranges.py \
             --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
             --language "$LANGUAGE" --shard "$((SHARD - 1))" \
-            --shard-count "$COUNT" --output-dir ranges > ranges.txt
+            --shard-count "$COUNT" --preserve-layout --output-dir ranges > ranges.txt
           test -s ranges.txt
       - name: Convert and validate with per-article timeout
         if: ${{ steps.check.outputs.skip != 'true' }}
@@ -106,47 +108,3 @@ jobs:
         if: always()
         run: rm -rf output ranges ranges.txt
 
-  rescue-english-6:
-    name: Preserve previously completed English shard 6
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
-      GH_TOKEN: ${{ github.token }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      HF_REPO: ffatty/plaintext-wikipedia-full-english
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Hugging Face uploader
-        run: python -m pip install huggingface_hub
-      - name: Check English shard 6
-        id: check
-        run: |
-          python - <<'PY'
-          import os
-          from huggingface_hub import HfApi
-          files = HfApi(token=os.environ["HF_TOKEN"]).list_repo_files(
-              os.environ["HF_REPO"], repo_type="dataset")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              print("skip=" + ("true" if "data/enwiki_06_of_10.txt.gz" in files else "false"), file=out)
-          PY
-      - name: Download English shard 6 from original build
-        if: ${{ steps.check.outputs.skip != 'true' }}
-        shell: bash
-        run: |
-          gh run download 38275908478 --repo "$GITHUB_REPOSITORY" \
-            --name full-enwiki-6 --dir recovered
-      - name: Upload English shard 6 to Hugging Face
-        if: ${{ steps.check.outputs.skip != 'true' }}
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from huggingface_hub import HfApi
-          f = Path("recovered/enwiki_06_of_10.txt.gz")
-          assert f.exists() and f.stat().st_size > 0
-          HfApi(token=os.environ["HF_TOKEN"]).upload_file(
-              path_or_fileobj=str(f), path_in_repo="data/" + f.name,
-              repo_id=os.environ["HF_REPO"], repo_type="dataset",
-              commit_message="Preserve finished English Wikipedia shard 6")
-          print("Preserved " + f.name)
-          PY
