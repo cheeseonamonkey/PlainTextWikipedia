@@ -207,14 +207,42 @@ jobs:
               + "\n\n")
           card = card.replace("## Format", warning + "## Format", 1)
           Path("publish/README.md").write_text(card, encoding="utf-8")
-          api.upload_folder(repo_id=repo, repo_type="dataset",
-                            folder_path="publish", path_in_repo="data",
-                            allow_patterns=["*.txt.gz", "build-manifest.json"],
-                            delete_patterns="*.txt.gz",
-                            commit_message=f'Rebuild {e["LANG_NAME"]} Wikipedia shards ({n}/{expected})')
-          api.upload_file(repo_id=repo, repo_type="dataset",
-                          path_or_fileobj="publish/README.md", path_in_repo="README.md",
-                          commit_message=f'Update {e["LANG_NAME"]} dataset card')
+          # Upload small independent commits instead of one multi-GB commit.
+          # This also allows a transient 429/500/504 to retry one leaf only.
+          import time
+          def retry_upload(description, action):
+              for attempt in range(5):
+                  try:
+                      return action()
+                  except Exception as exc:
+                      if attempt == 4:
+                          raise
+                      delay = min(120, 10 * 2 ** attempt)
+                      print(f"Retrying {description} in {delay}s: {exc}", flush=True)
+                      time.sleep(delay)
+          current = sorted(Path("publish").glob("*.txt.gz"))
+          wanted = {f"data/{file.name}" for file in current}
+          existing = set(api.list_repo_files(repo, repo_type="dataset"))
+          for file in current:
+              retry_upload(file.name, lambda file=file: api.upload_file(
+                  repo_id=repo, repo_type="dataset",
+                  path_or_fileobj=str(file), path_in_repo=f"data/{file.name}",
+                  commit_message=f'Update {e["LANG_NAME"]} leaf {file.name}'))
+          retry_upload("build-manifest.json", lambda: api.upload_file(
+              repo_id=repo, repo_type="dataset",
+              path_or_fileobj="publish/build-manifest.json",
+              path_in_repo="data/build-manifest.json",
+              commit_message=f'Publish coverage for {e["LANG_NAME"]} ({n}/{expected})'))
+          retry_upload("README.md", lambda: api.upload_file(
+              repo_id=repo, repo_type="dataset",
+              path_or_fileobj="publish/README.md", path_in_repo="README.md",
+              commit_message=f'Update {e["LANG_NAME"]} dataset card'))
+          for obsolete in sorted(existing - wanted):
+              if obsolete.startswith("data/") and obsolete.endswith(".txt.gz"):
+                  retry_upload(f"delete {obsolete}", lambda obsolete=obsolete: api.delete_file(
+                      repo_id=repo, repo_type="dataset", path_in_repo=obsolete,
+                      commit_message=f"Remove obsolete {obsolete}"))
+          print(f"Uploaded {len(current)} leaves; removed obsolete compressed archives")
           print(f"https://huggingface.co/datasets/{repo}")
           PY
       - name: Publish to Kaggle
