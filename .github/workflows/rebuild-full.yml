@@ -138,8 +138,13 @@ jobs:
             en) name=English ;; es) name=Spanish ;; fr) name=French ;;
             de) name=German ;; it) name=Italian ;; pt) name=Portuguese ;;
             ru) name=Russian ;; zh) name=Chinese ;; no) name=Norwegian ;;
-            *) name="$code" ;;
+            *) name="" ;;
           esac
+          if [[ -z "$name" ]]; then
+            IFS='|' read -r name slug < <(python scripts/language_info.py "$LANGUAGE")
+            if [[ -z "$hf_id" ]]; then hf_id="ffatty/plaintext-wikipedia-full-$slug"; fi
+            if [[ -z "$kaggle_id" ]]; then kaggle_id="ffatty/plaintext-wikipedia-full-$slug"; fi
+          fi
           echo "FULL_HF_REPO=$hf_id" >> "$GITHUB_ENV"
           echo "FULL_KAGGLE_DATASET=$kaggle_id" >> "$GITHUB_ENV"
           echo "LANG_CODE=$code" >> "$GITHUB_ENV"

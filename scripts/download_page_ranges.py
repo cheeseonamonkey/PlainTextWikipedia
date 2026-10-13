@@ -56,6 +56,22 @@ def page_range_catalog(
     )
     for name, date, size in listing_pattern.findall(listing):
         dates[name] = (date, int(size))
+    if not found:
+        # Most smaller language editions publish a single non-multistream
+        # pages-articles archive rather than numbered page-range files.
+        # Use it as one independent input without changing existing large-wiki
+        # page-range partitioning.
+        single = f"{language}-latest-pages-articles.xml.bz2"
+        single_pattern = re.compile(
+            rf'<a\s+href="{re.escape(single)}"[^>]*>[^<]*</a>\s+'
+            r'(\d{2}-[A-Za-z]{3}-\d{4})\s+\d{2}:\d{2}\s+(\d+)'
+        )
+        match = single_pattern.search(listing)
+        if match and int(match.group(2)) >= 4096:
+            return [(1, 2147483647, single, match.group(1), int(match.group(2)))]
+        if single in listing:
+            # Some directory mirrors do not render the date/size columns.
+            return [(1, 2147483647, single, "", 0)]
     return sorted(
         (
             (start, end, name, *dates.get(name, ("", 0)))

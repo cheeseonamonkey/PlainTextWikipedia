@@ -22,6 +22,24 @@ class PageRangeTests(unittest.TestCase):
              (101, 200, "eswiki-latest-pages-articles2.xml-p101p200.bz2")],
         )
 
+    def test_smaller_wikipedia_uses_single_archive(self):
+        html = b'''
+        <a href="arcwiki-latest-pages-articles.xml.bz2">arcwiki-latest-pages-articles.xml.bz2</a> 01-Oct-2026 22:19 21393824
+        <a href="arcwiki-latest-pages-articles-multistream.xml.bz2">multistream</a>
+        '''
+        with patch("scripts.download_page_ranges.open_url", return_value=io.BytesIO(html)):
+            ranges = page_ranges("https://dumps.wikimedia.org/arcwiki/latest", "arcwiki")
+        self.assertEqual(ranges, [
+            (1, 2147483647, "arcwiki-latest-pages-articles.xml.bz2")
+        ])
+
+    def test_single_dump_without_date_columns(self):
+        html = b'<a href="tokwiki-latest-pages-articles.xml.bz2">download</a>'
+        with patch("scripts.download_page_ranges.open_url", return_value=io.BytesIO(html)):
+            ranges = page_ranges("https://dumps.wikimedia.org/tokwiki/latest", "tokwiki")
+        self.assertEqual(len(ranges), 1)
+        self.assertEqual(ranges[0][2], "tokwiki-latest-pages-articles.xml.bz2")
+
     def test_exclude_obsolete_404_and_overlapping_ranges(self):
         # Wikimedia latest/ can retain September files whose starts overlap
         # the current October partition, including nonempty stale archives.
