@@ -1,5 +1,5 @@
 name: Retry missing Wikipedia shards
-run-name: Repair obsolete October dump page-ranges and missing shards
+run-name: Restore current October dump shards — corrected downloader
 
 on:
   push:
