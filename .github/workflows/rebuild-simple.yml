@@ -81,7 +81,7 @@ jobs:
           HfApi(token=e["HF_TOKEN"]).create_repo(
               repo_id=e["SIMPLE_HF_REPO"], repo_type="dataset", exist_ok=True)
           PY
-          hf upload "$SIMPLE_HF_REPO" output             --repo-type dataset --token "$HF_TOKEN" --path-in-repo data             --commit-message "Complete Simple English rebuild ($(date -u +%Y-%m-%d))"
+          hf upload "$SIMPLE_HF_REPO" output data --repo-type dataset --token "$HF_TOKEN" --commit-message "Complete Simple English rebuild ($(date -u +%Y-%m-%d))"
 
       - name: Publish provenance card to Hugging Face
         if: ${{ env.HF_TOKEN != '' }}
