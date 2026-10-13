@@ -100,7 +100,7 @@ jobs:
           path: output/*.txt.gz
           compression-level: 0
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
       - name: Free runner disk
         if: always()
         run: rm -rf output ranges ranges.txt
