@@ -48,29 +48,6 @@ jobs:
           test "$articles" -gt 1000
           echo "Validated $articles articles"
 
-      - name: Configure Kaggle credentials
-        if: ${{ env.KAGGLE_TOKEN != '' }}
-        run: echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
-
-      - name: Publish to Kaggle
-        if: ${{ env.KAGGLE_TOKEN != '' }}
-        run: |
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          e = os.environ
-          meta = json.loads(Path("kaggle-metadata.json").read_text())
-          meta["id"] = e["SIMPLE_KAGGLE_DATASET"]
-          meta["description"] = meta["description"].replace("__REPO_URL__", e["SOURCE_REPO_URL"])
-          meta["description"] = meta["description"].replace("__UPSTREAM_URL__", e["UPSTREAM_REPO_URL"])
-          Path("output/dataset-metadata.json").write_text(json.dumps(meta, indent=2))
-          PY
-          if kaggle datasets files -d "$SIMPLE_KAGGLE_DATASET" >/dev/null 2>&1; then
-            kaggle datasets version -p output -m "Complete Simple English rebuild ($(date -u +%F))" --dir-mode skip
-          else
-            kaggle datasets create -p output --public --dir-mode skip
-          fi
-
       - name: Publish to Hugging Face
         if: ${{ env.HF_TOKEN != '' }}
         run: |
@@ -104,6 +81,42 @@ jobs:
           Path("README.md").write_text(s)
           PY
           hf upload "$SIMPLE_HF_REPO" README.md README.md             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Credit source repositories for Simple English Wikipedia"
+
+      - name: Configure Kaggle credentials
+        if: ${{ env.KAGGLE_TOKEN != '' }}
+        shell: bash
+        run: |
+          if [[ "$KAGGLE_TOKEN" == \{* ]]; then
+            mkdir -p "$HOME/.kaggle"
+            printf '%s' "$KAGGLE_TOKEN" > "$HOME/.kaggle/kaggle.json"
+            chmod 600 "$HOME/.kaggle/kaggle.json"
+          else
+            echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
+          fi
+
+      - name: Publish to Kaggle
+        if: ${{ env.KAGGLE_TOKEN != '' }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          e = os.environ
+          meta = json.loads(Path("kaggle-metadata.json").read_text())
+          meta["id"] = e["SIMPLE_KAGGLE_DATASET"]
+          meta["description"] = meta["description"].replace("__REPO_URL__", e["SOURCE_REPO_URL"])
+          meta["description"] = meta["description"].replace("__UPSTREAM_URL__", e["UPSTREAM_REPO_URL"])
+          Path("output/dataset-metadata.json").write_text(json.dumps(meta, indent=2))
+          PY
+          if ! kaggle quota > /dev/null 2>&1; then
+            echo "::warning::Kaggle credentials rejected; Simple English already published previously; skipping Kaggle update"
+            exit 0
+          fi
+          if kaggle datasets files -d "$SIMPLE_KAGGLE_DATASET" >/dev/null 2>&1; then
+            kaggle datasets version -p output -m "Complete Simple English rebuild ($(date -u +%F))" --dir-mode skip
+          else
+            kaggle datasets create -p output --public --dir-mode skip
+          fi
+
 
       - name: Free runner disk
         if: always()
