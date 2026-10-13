@@ -1,0 +1,105 @@
+name: Bootstrap 73 language-diversity Wikipedias
+run-name: Hebrew and 72 Indigenous / heritage-language editions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap-language-diversity.yml
+
+permissions:
+  contents: read
+  actions: write
+
+# Keep this separate from the original 42-language batch. A rerun here will
+# not rebuild unrelated large wikis or any of the already published 10.
+concurrency:
+  group: bootstrap-language-diversity
+  cancel-in-progress: false
+
+jobs:
+  language-diversity:
+    name: ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        language:
+          - hewiki
+          - atjwiki
+          - chywiki
+          - iuwiki
+          - ikwiki
+          - nahwiki
+          - pplwiki
+          - quwiki
+          - aywiki
+          - gnwiki
+          - hawwiki
+          - miwiki
+          - tywiki
+          - towiki
+          - smwiki
+          - dtpwiki
+          - szywiki
+          - taywiki
+          - trvwiki
+          - amiwiki
+          - pwnwiki
+          - brwiki
+          - gawiki
+          - gdwiki
+          - kwwiki
+          - gvwiki
+          - sewiki
+          - smnwiki
+          - vepwiki
+          - udmwiki
+          - kvwiki
+          - olowiki
+          - koiwiki
+          - mhrwiki
+          - mrjwiki
+          - myvwiki
+          - mdfwiki
+          - bxrwiki
+          - xalwiki
+          - sahwiki
+          - tyvwiki
+          - altwiki
+          - gagwiki
+          - krcwiki
+          - ocwiki
+          - anwiki
+          - astwiki
+          - lmowiki
+          - pmswiki
+          - vecwiki
+          - napwiki
+          - emlwiki
+          - lijwiki
+          - scwiki
+          - pcdwiki
+          - furwiki
+          - frpwiki
+          - nrmwiki
+          - mwlwiki
+          - extwiki
+          - ladwiki
+          - cowiki
+          - wawiki
+          - zghwiki
+          - shiwiki
+          - kabwiki
+          - abwiki
+          - kbdwiki
+          - adywiki
+          - tiwiki
+          - tigwiki
+          - rmywiki
+          - ugwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: ${{ matrix.language }}
+    secrets: inherit

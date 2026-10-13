@@ -1,5 +1,5 @@
 {
-  "description": "Additional Wikipedia projects to attempt as independent one-time imports. Include only a Wikimedia Wikipedia edition, not a substitute language.",
+  "description": "Wikipedia editions to import independently, including language-diversity and revitalization priorities. These categories do not assign an endangerment status; Wikimedia project availability and dump success are verified by CI.",
   "languages": [
     {
       "name": "Arabic",
@@ -210,6 +210,444 @@
       "name": "Cebuano",
       "project": "cebwiki",
       "slug": "cebuano"
+    },
+    {
+      "name": "Hebrew",
+      "project": "hewiki",
+      "slug": "hebrew",
+      "collection": "requested"
+    },
+    {
+      "name": "Atikamekw",
+      "project": "atjwiki",
+      "slug": "atikamekw",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Cheyenne",
+      "project": "chywiki",
+      "slug": "cheyenne",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Inuktitut",
+      "project": "iuwiki",
+      "slug": "inuktitut",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Inupiaq",
+      "project": "ikwiki",
+      "slug": "inupiaq",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Nahuatl",
+      "project": "nahwiki",
+      "slug": "nahuatl",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Pipil (Nawat)",
+      "project": "pplwiki",
+      "slug": "pipil-nawat",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Quechua",
+      "project": "quwiki",
+      "slug": "quechua",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Aymara",
+      "project": "aywiki",
+      "slug": "aymara",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Guarani",
+      "project": "gnwiki",
+      "slug": "guarani",
+      "collection": "indigenous-americas"
+    },
+    {
+      "name": "Hawaiian",
+      "project": "hawwiki",
+      "slug": "hawaiian",
+      "collection": "pacific"
+    },
+    {
+      "name": "Maori",
+      "project": "miwiki",
+      "slug": "maori",
+      "collection": "pacific"
+    },
+    {
+      "name": "Tahitian",
+      "project": "tywiki",
+      "slug": "tahitian",
+      "collection": "pacific"
+    },
+    {
+      "name": "Tongan",
+      "project": "towiki",
+      "slug": "tongan",
+      "collection": "pacific"
+    },
+    {
+      "name": "Samoan",
+      "project": "smwiki",
+      "slug": "samoan",
+      "collection": "pacific"
+    },
+    {
+      "name": "Central Dusun",
+      "project": "dtpwiki",
+      "slug": "central-dusun",
+      "collection": "pacific"
+    },
+    {
+      "name": "Sakizaya",
+      "project": "szywiki",
+      "slug": "sakizaya",
+      "collection": "formosan"
+    },
+    {
+      "name": "Atayal",
+      "project": "taywiki",
+      "slug": "atayal",
+      "collection": "formosan"
+    },
+    {
+      "name": "Seediq",
+      "project": "trvwiki",
+      "slug": "seediq",
+      "collection": "formosan"
+    },
+    {
+      "name": "Amis",
+      "project": "amiwiki",
+      "slug": "amis",
+      "collection": "formosan"
+    },
+    {
+      "name": "Paiwan",
+      "project": "pwnwiki",
+      "slug": "paiwan",
+      "collection": "formosan"
+    },
+    {
+      "name": "Breton",
+      "project": "brwiki",
+      "slug": "breton",
+      "collection": "celtic"
+    },
+    {
+      "name": "Irish",
+      "project": "gawiki",
+      "slug": "irish",
+      "collection": "celtic"
+    },
+    {
+      "name": "Scottish Gaelic",
+      "project": "gdwiki",
+      "slug": "scottish-gaelic",
+      "collection": "celtic"
+    },
+    {
+      "name": "Cornish",
+      "project": "kwwiki",
+      "slug": "cornish",
+      "collection": "celtic"
+    },
+    {
+      "name": "Manx",
+      "project": "gvwiki",
+      "slug": "manx",
+      "collection": "celtic"
+    },
+    {
+      "name": "Northern Sami",
+      "project": "sewiki",
+      "slug": "northern-sami",
+      "collection": "uralic"
+    },
+    {
+      "name": "Inari Sami",
+      "project": "smnwiki",
+      "slug": "inari-sami",
+      "collection": "uralic"
+    },
+    {
+      "name": "Veps",
+      "project": "vepwiki",
+      "slug": "veps",
+      "collection": "uralic"
+    },
+    {
+      "name": "Udmurt",
+      "project": "udmwiki",
+      "slug": "udmurt",
+      "collection": "uralic"
+    },
+    {
+      "name": "Komi",
+      "project": "kvwiki",
+      "slug": "komi",
+      "collection": "uralic"
+    },
+    {
+      "name": "Livvi-Karelian",
+      "project": "olowiki",
+      "slug": "livvi-karelian",
+      "collection": "uralic"
+    },
+    {
+      "name": "Komi-Permyak",
+      "project": "koiwiki",
+      "slug": "komi-permyak",
+      "collection": "uralic"
+    },
+    {
+      "name": "Meadow Mari",
+      "project": "mhrwiki",
+      "slug": "meadow-mari",
+      "collection": "uralic"
+    },
+    {
+      "name": "Hill Mari",
+      "project": "mrjwiki",
+      "slug": "hill-mari",
+      "collection": "uralic"
+    },
+    {
+      "name": "Erzya",
+      "project": "myvwiki",
+      "slug": "erzya",
+      "collection": "uralic"
+    },
+    {
+      "name": "Moksha",
+      "project": "mdfwiki",
+      "slug": "moksha",
+      "collection": "uralic"
+    },
+    {
+      "name": "Buryat",
+      "project": "bxrwiki",
+      "slug": "buryat",
+      "collection": "north-asia"
+    },
+    {
+      "name": "Kalmyk",
+      "project": "xalwiki",
+      "slug": "kalmyk",
+      "collection": "north-asia"
+    },
+    {
+      "name": "Sakha (Yakut)",
+      "project": "sahwiki",
+      "slug": "sakha",
+      "collection": "north-asia"
+    },
+    {
+      "name": "Tuvan",
+      "project": "tyvwiki",
+      "slug": "tuvan",
+      "collection": "north-asia"
+    },
+    {
+      "name": "Altai",
+      "project": "altwiki",
+      "slug": "altai",
+      "collection": "north-asia"
+    },
+    {
+      "name": "Gagauz",
+      "project": "gagwiki",
+      "slug": "gagauz",
+      "collection": "north-asia"
+    },
+    {
+      "name": "Karachay-Balkar",
+      "project": "krcwiki",
+      "slug": "karachay-balkar",
+      "collection": "north-asia"
+    },
+    {
+      "name": "Occitan",
+      "project": "ocwiki",
+      "slug": "occitan",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Aragonese",
+      "project": "anwiki",
+      "slug": "aragonese",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Asturian",
+      "project": "astwiki",
+      "slug": "asturian",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Lombard",
+      "project": "lmowiki",
+      "slug": "lombard",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Piedmontese",
+      "project": "pmswiki",
+      "slug": "piedmontese",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Venetian",
+      "project": "vecwiki",
+      "slug": "venetian",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Neapolitan",
+      "project": "napwiki",
+      "slug": "neapolitan",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Emilian-Romagnol",
+      "project": "emlwiki",
+      "slug": "emilian-romagnol",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Ligurian",
+      "project": "lijwiki",
+      "slug": "ligurian",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Sardinian",
+      "project": "scwiki",
+      "slug": "sardinian",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Picard",
+      "project": "pcdwiki",
+      "slug": "picard",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Friulian",
+      "project": "furwiki",
+      "slug": "friulian",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Arpitan",
+      "project": "frpwiki",
+      "slug": "arpitan",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Norman",
+      "project": "nrmwiki",
+      "slug": "norman",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Mirandese",
+      "project": "mwlwiki",
+      "slug": "mirandese",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Extremaduran",
+      "project": "extwiki",
+      "slug": "extremaduran",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Ladino",
+      "project": "ladwiki",
+      "slug": "ladino",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Corsican",
+      "project": "cowiki",
+      "slug": "corsican",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Walloon",
+      "project": "wawiki",
+      "slug": "walloon",
+      "collection": "regional-european"
+    },
+    {
+      "name": "Standard Moroccan Amazigh",
+      "project": "zghwiki",
+      "slug": "standard-moroccan-amazigh",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Shilha",
+      "project": "shiwiki",
+      "slug": "shilha",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Kabyle",
+      "project": "kabwiki",
+      "slug": "kabyle",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Abkhaz",
+      "project": "abwiki",
+      "slug": "abkhaz",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Kabardian",
+      "project": "kbdwiki",
+      "slug": "kabardian",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Adyghe",
+      "project": "adywiki",
+      "slug": "adyghe",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Tigrinya",
+      "project": "tiwiki",
+      "slug": "tigrinya",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Tigre",
+      "project": "tigwiki",
+      "slug": "tigre",
+      "collection": "africa-caucasus"
+    },
+    {
+      "name": "Romani",
+      "project": "rmywiki",
+      "slug": "romani",
+      "collection": "heritage"
+    },
+    {
+      "name": "Uyghur",
+      "project": "ugwiki",
+      "slug": "uyghur",
+      "collection": "heritage"
     }
   ]
 }
