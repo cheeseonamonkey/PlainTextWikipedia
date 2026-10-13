@@ -1,0 +1,120 @@
+name: Publish ready Wikipedia datasets
+run-name: Publish completed Wikipedia editions to Kaggle and Simple English to HF
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/publish-available.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-ready-wikipedia
+  cancel-in-progress: false
+
+jobs:
+  simple-english:
+    name: Publish Simple English to HF
+    uses: ./.github/workflows/rebuild-simple.yml
+    secrets: inherit
+
+  kaggle:
+    name: Publish ${{ matrix.language }} to Kaggle from Hugging Face
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - {code: frwiki, language: French, slug: french}
+          - {code: ptwiki, language: Portuguese, slug: portuguese}
+          - {code: zhwiki, language: Chinese, slug: chinese}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      LANG_CODE: ${{ matrix.code }}
+      LANG_NAME: ${{ matrix.language }}
+      HF_REPO: ffatty/plaintext-wikipedia-full-${{ matrix.slug }}
+      KAGGLE_DATASET: ffatty/plaintext-wikipedia-full-${{ matrix.slug }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Kaggle and Hugging Face clients
+        run: python -m pip install kaggle huggingface_hub
+      - name: Verify Kaggle credentials before downloading gigabytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$KAGGLE_TOKEN" ]]; then
+            echo "::error::KAGGLE_TOKEN GitHub Actions secret missing"
+            exit 1
+          fi
+          if [[ "$KAGGLE_TOKEN" == \{* ]]; then
+            mkdir -p "$HOME/.kaggle"
+            printf '%s' "$KAGGLE_TOKEN" > "$HOME/.kaggle/kaggle.json"
+            chmod 600 "$HOME/.kaggle/kaggle.json"
+          else
+            echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
+            export KAGGLE_API_TOKEN="$KAGGLE_TOKEN"
+          fi
+          if ! kaggle quota >/dev/null 2>&1; then
+            echo "::error::Kaggle rejected the configured API credentials. Refresh KAGGLE_TOKEN in repository secrets."
+            exit 1
+          fi
+          echo "Kaggle API authenticated"
+      - name: Download existing complete dataset from Hugging Face
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          from huggingface_hub import HfApi, hf_hub_download
+          e = os.environ
+          repo = e["HF_REPO"]
+          token = e["HF_TOKEN"] or None
+          files = sorted(f for f in HfApi(token=token).list_repo_files(repo, repo_type="dataset") if f.startswith("data/") and f.endswith(".txt.gz"))
+          if len(files) != 10:
+              raise RuntimeError(f"{repo} has {len(files)}/10 shards, refusing to mark incomplete dataset complete")
+          Path("publish").mkdir(exist_ok=True)
+          for f in files:
+              print(f"Downloading {f}", flush=True)
+              downloaded = hf_hub_download(repo_id=repo, repo_type="dataset",
+                                           filename=f, token=token, local_dir="downloaded")
+              dst = Path("publish") / Path(f).name
+              shutil.move(downloaded, dst)
+          print(f"Downloaded {len(files)} shards", flush=True)
+          PY
+      - name: Validate archives and generate Kaggle metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find publish -maxdepth 1 -name '*.txt.gz' | wc -l)" -eq 10
+          for f in publish/*.txt.gz; do gzip -t "$f"; done
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          e = os.environ
+          meta = json.loads(Path("kaggle-metadata-full.json").read_text())
+          meta["title"] = f'Plaintext Wikipedia ({e["LANG_NAME"]})'
+          meta["id"] = e["KAGGLE_DATASET"]
+          meta["description"] = meta["description"].replace("English", e["LANG_NAME"])
+          meta["description"] = meta["description"].replace("__REPO_URL__", "https://github.com/cheeseonamonkey/PlainTextWikipedia")
+          meta["description"] = meta["description"].replace("__UPSTREAM_URL__", "https://github.com/daveshap/PlainTextWikipedia")
+          meta["description"] += f'\n\nMirrored from https://huggingface.co/datasets/{e["HF_REPO"]}. Includes all ten compressed shards.'
+          Path("publish/dataset-metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+          PY
+      - name: Publish dataset to Kaggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          if kaggle datasets files -d "$KAGGLE_DATASET" >/dev/null 2>&1; then
+            kaggle datasets version -p publish \
+              -m "Complete $LANG_NAME Wikipedia rebuild" --dir-mode skip
+          else
+            kaggle datasets create -p publish --public --dir-mode skip
+          fi
+          echo "Published https://www.kaggle.com/datasets/$KAGGLE_DATASET"
