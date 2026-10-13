@@ -2,10 +2,6 @@ name: Publish ready Wikipedia datasets
 run-name: Publish completed Wikipedia editions to Kaggle and Simple English to HF
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/publish-available.yml
   workflow_dispatch:
 
 permissions:
@@ -28,14 +24,15 @@ jobs:
       max-parallel: 3
       matrix:
         include:
-          - {code: frwiki, language: French, slug: french}
-          - {code: ptwiki, language: Portuguese, slug: portuguese}
-          - {code: zhwiki, language: Chinese, slug: chinese}
+          - {code: frwiki, language: French, slug: french, count: 10}
+          - {code: ptwiki, language: Portuguese, slug: portuguese, count: 9}
+          - {code: zhwiki, language: Chinese, slug: chinese, count: 10}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      EXPECTED_SHARDS: ${{ matrix.count }}
       LANG_CODE: ${{ matrix.code }}
       LANG_NAME: ${{ matrix.language }}
       HF_REPO: ffatty/plaintext-wikipedia-full-${{ matrix.slug }}
@@ -77,8 +74,9 @@ jobs:
           repo = e["HF_REPO"]
           token = e["HF_TOKEN"] or None
           files = sorted(f for f in HfApi(token=token).list_repo_files(repo, repo_type="dataset") if f.startswith("data/") and f.endswith(".txt.gz"))
-          if len(files) != 10:
-              raise RuntimeError(f"{repo} has {len(files)}/10 shards, refusing to mark incomplete dataset complete")
+          expected = int(e["EXPECTED_SHARDS"])
+          if len(files) != expected:
+              raise RuntimeError(f"{repo} has {len(files)}/{expected} shards, refusing to mark incomplete dataset complete")
           Path("publish").mkdir(exist_ok=True)
           for f in files:
               print(f"Downloading {f}", flush=True)
@@ -92,7 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(find publish -maxdepth 1 -name '*.txt.gz' | wc -l)" -eq 10
+          test "$(find publish -maxdepth 1 -name '*.txt.gz' | wc -l)" -eq "$EXPECTED_SHARDS"
           for f in publish/*.txt.gz; do gzip -t "$f"; done
           python - <<'PY'
           import json, os
