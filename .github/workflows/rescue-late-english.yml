@@ -1,0 +1,72 @@
+name: Preserve late English Wikipedia shards
+on:
+  workflow_run:
+    workflows: ["Build all Wikipedia languages"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  upload:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.id == 38275908478 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      OLD_RUN: "38275908478"
+      HF_REPO: ffatty/plaintext-wikipedia-full-english
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uploader
+        run: python -m pip install huggingface_hub
+      - name: Preserve all finished English shards not already stored
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$OLD_RUN/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == false) | .name' \
+              | grep -E '^full-enwiki-[0-9]+$' | sort -V > /tmp/enwiki-artifacts.txt
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          e = os.environ
+          existing = HfApi(token=e["HF_TOKEN"]).list_repo_files(e["HF_REPO"], repo_type="dataset")
+          missing = []
+          for artifact in Path("/tmp/enwiki-artifacts.txt").read_text().splitlines():
+              number = int(artifact.rsplit("-", 1)[-1])
+              name = f"enwiki_{number:02d}_of_10.txt.gz"
+              if f"data/{name}" not in existing:
+                  missing.append(artifact)
+          Path("/tmp/to-upload.txt").write_text("\n".join(missing) + ("\n" if missing else ""))
+          print("Missing from HF:", missing, flush=True)
+          PY
+          while IFS= read -r artifact; do
+            mkdir -p /tmp/English
+            gh run download "$OLD_RUN" -R "$GITHUB_REPOSITORY" \
+              --name "$artifact" --dir /tmp/English
+            python - <<'PY'
+          import gzip
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          files = list(Path("/tmp/English").rglob("*.txt.gz"))
+          if len(files) != 1:
+              raise RuntimeError(f"Expected one gzip archive: {files}")
+          f = files[0]
+          with gzip.open(f, "rb") as g:
+              while g.read(8 * 1024 * 1024):
+                  pass
+          HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+              repo_id=os.environ["HF_REPO"], repo_type="dataset",
+              path_or_fileobj=str(f), path_in_repo="data/" + f.name,
+              commit_message=f"Preserve late English shard {f.name}")
+          print("Published", f.name, flush=True)
+          PY
+            rm -rf /tmp/English
+          done < /tmp/to-upload.txt
+          echo "Late English shard preservation complete"
