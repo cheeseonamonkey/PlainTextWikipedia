@@ -306,17 +306,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Only remove this language's artifacts from this exact run;
-          # never erase recovery copies when every destination failed.
+          # Only delete this exact run's matching shard artifacts after one publisher succeeds.
           gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
             --jq '.artifacts[] | [.id, .name] | @tsv' \
-            | while IFS=
-        if: ${{ env.HF_TOKEN == '' || env.KAGGLE_TOKEN == '' }}
-        shell: bash
-        run: |
-          [[ -n "$HF_TOKEN" ]] || echo "::warning::HF_TOKEN absent: HF publication skipped"
-          [[ -n "$KAGGLE_TOKEN" ]] || echo "::warning::KAGGLE_TOKEN absent: Kaggle publication skipped"
-\t' read -r id name; do
+            | while read -r id name; do
                 if [[ "$name" =~ ^full-${LANGUAGE}-[0-9]+$ ]]; then
                   gh api --method DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
                   echo "Deleted published artifact $name ($id)"
