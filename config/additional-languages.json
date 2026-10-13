@@ -1,0 +1,215 @@
+{
+  "description": "Additional Wikipedia projects to attempt as independent one-time imports. Include only a Wikimedia Wikipedia edition, not a substitute language.",
+  "languages": [
+    {
+      "name": "Arabic",
+      "project": "arwiki",
+      "slug": "arabic"
+    },
+    {
+      "name": "Japanese",
+      "project": "jawiki",
+      "slug": "japanese"
+    },
+    {
+      "name": "Serbo-Croatian",
+      "project": "shwiki",
+      "slug": "serbo-croatian"
+    },
+    {
+      "name": "Persian",
+      "project": "fawiki",
+      "slug": "persian"
+    },
+    {
+      "name": "Swedish",
+      "project": "svwiki",
+      "slug": "swedish"
+    },
+    {
+      "name": "Ukrainian",
+      "project": "ukwiki",
+      "slug": "ukrainian"
+    },
+    {
+      "name": "Swahili",
+      "project": "swwiki",
+      "slug": "swahili"
+    },
+    {
+      "name": "Korean",
+      "project": "kowiki",
+      "slug": "korean"
+    },
+    {
+      "name": "Esperanto",
+      "project": "eowiki",
+      "slug": "esperanto"
+    },
+    {
+      "name": "Scots",
+      "project": "scowiki",
+      "slug": "scots"
+    },
+    {
+      "name": "Toki Pona",
+      "project": "tokwiki",
+      "slug": "toki-pona"
+    },
+    {
+      "name": "Hindi",
+      "project": "hiwiki",
+      "slug": "hindi"
+    },
+    {
+      "name": "Bengali",
+      "project": "bnwiki",
+      "slug": "bengali"
+    },
+    {
+      "name": "Urdu",
+      "project": "urwiki",
+      "slug": "urdu"
+    },
+    {
+      "name": "Navajo",
+      "project": "nvwiki",
+      "slug": "navajo"
+    },
+    {
+      "name": "Cherokee",
+      "project": "chrwiki",
+      "slug": "cherokee"
+    },
+    {
+      "name": "Basque",
+      "project": "euwiki",
+      "slug": "basque"
+    },
+    {
+      "name": "Latin",
+      "project": "lawiki",
+      "slug": "latin"
+    },
+    {
+      "name": "Telugu",
+      "project": "tewiki",
+      "slug": "telugu"
+    },
+    {
+      "name": "Tok Pisin",
+      "project": "tpiwiki",
+      "slug": "tok-pisin"
+    },
+    {
+      "name": "Nigerian Pidgin",
+      "project": "pcmwiki",
+      "slug": "nigerian-pidgin"
+    },
+    {
+      "name": "Vietnamese",
+      "project": "viwiki",
+      "slug": "vietnamese"
+    },
+    {
+      "name": "Marathi",
+      "project": "mrwiki",
+      "slug": "marathi"
+    },
+    {
+      "name": "Hausa",
+      "project": "hawiki",
+      "slug": "hausa"
+    },
+    {
+      "name": "Ido",
+      "project": "iowiki",
+      "slug": "ido"
+    },
+    {
+      "name": "Volapük",
+      "project": "vowiki",
+      "slug": "volapuk"
+    },
+    {
+      "name": "Lojban",
+      "project": "jbowiki",
+      "slug": "lojban"
+    },
+    {
+      "name": "Gothic",
+      "project": "gotwiki",
+      "slug": "gothic"
+    },
+    {
+      "name": "Old English",
+      "project": "angwiki",
+      "slug": "old-english"
+    },
+    {
+      "name": "Classical Chinese",
+      "project": "zh_classicalwiki",
+      "slug": "classical-chinese"
+    },
+    {
+      "name": "Aramaic (Syriac)",
+      "project": "arcwiki",
+      "slug": "aramaic-syriac"
+    },
+    {
+      "name": "Dutch",
+      "project": "nlwiki",
+      "slug": "dutch"
+    },
+    {
+      "name": "Polish",
+      "project": "plwiki",
+      "slug": "polish"
+    },
+    {
+      "name": "Waray",
+      "project": "warwiki",
+      "slug": "waray"
+    },
+    {
+      "name": "Chechen",
+      "project": "cewiki",
+      "slug": "chechen"
+    },
+    {
+      "name": "Serbian",
+      "project": "srwiki",
+      "slug": "serbian"
+    },
+    {
+      "name": "Turkish",
+      "project": "trwiki",
+      "slug": "turkish"
+    },
+    {
+      "name": "Greek",
+      "project": "elwiki",
+      "slug": "greek"
+    },
+    {
+      "name": "Czech",
+      "project": "cswiki",
+      "slug": "czech"
+    },
+    {
+      "name": "Welsh",
+      "project": "cywiki",
+      "slug": "welsh"
+    },
+    {
+      "name": "Thai",
+      "project": "thwiki",
+      "slug": "thai"
+    },
+    {
+      "name": "Cebuano",
+      "project": "cebwiki",
+      "slug": "cebuano"
+    }
+  ]
+}
