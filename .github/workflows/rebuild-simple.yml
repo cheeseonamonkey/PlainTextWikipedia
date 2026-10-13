@@ -71,7 +71,7 @@ jobs:
           for key, value in {
               "__LANG_PROJECT__": "simplewiki",
               "__LANG_NAME__": "Simple English",
-              "__LANG_CODE__": "simple",
+              "__LANG_CODE__": "en",
               "__HF_REPO__": e["SIMPLE_HF_REPO"],
               "__SOURCE_URL__": e["SIMPLE_SOURCE_URL"],
               "__REPO_URL__": e["SOURCE_REPO_URL"],
