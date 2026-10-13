@@ -19,6 +19,59 @@ Convert official Wikimedia dumps into independently compressed, UTF-8 plaintext 
 
 Links above are the **configured publishing destinations**. A dataset may be pending or incomplete if its latest workflow is still running or a publishing service rejected an upload. Check the dataset's latest files and `data/build-manifest.json` (on Hugging Face) or `build-manifest.json` (on Kaggle) for verified coverage, available archives, and missing ranges.
 
+## Additional language imports (launch batch)
+
+The following **42 additional editions** are configured for the first import. These are target URLs, **not proof that a dataset has been published**. Some may remain pending, fail preflight because an October dump is unavailable, or require publisher retries.
+
+| Wikipedia edition | Hugging Face destination | Kaggle destination |
+|---|---|---|
+| Arabic (`arwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-arabic) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-arabic) |
+| Japanese (`jawiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-japanese) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-japanese) |
+| Serbo-Croatian (`shwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-serbo-croatian) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-serbo-croatian) |
+| Persian (`fawiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-persian) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-persian) |
+| Swedish (`svwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-swedish) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-swedish) |
+| Ukrainian (`ukwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-ukrainian) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-ukrainian) |
+| Swahili (`swwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-swahili) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-swahili) |
+| Korean (`kowiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-korean) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-korean) |
+| Esperanto (`eowiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-esperanto) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-esperanto) |
+| Scots (`scowiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-scots) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-scots) |
+| Toki Pona (`tokwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-toki-pona) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-toki-pona) |
+| Hindi (`hiwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-hindi) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-hindi) |
+| Bengali (`bnwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-bengali) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-bengali) |
+| Urdu (`urwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-urdu) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-urdu) |
+| Navajo (`nvwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-navajo) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-navajo) |
+| Cherokee (`chrwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-cherokee) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-cherokee) |
+| Basque (`euwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-basque) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-basque) |
+| Latin (`lawiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-latin) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-latin) |
+| Telugu (`tewiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-telugu) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-telugu) |
+| Tok Pisin (`tpiwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-tok-pisin) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-tok-pisin) |
+| Nigerian Pidgin (`pcmwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-nigerian-pidgin) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-nigerian-pidgin) |
+| Vietnamese (`viwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-vietnamese) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-vietnamese) |
+| Marathi (`mrwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-marathi) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-marathi) |
+| Hausa (`hawiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-hausa) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-hausa) |
+| Ido (`iowiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-ido) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-ido) |
+| Volapük (`vowiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-volapuk) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-volapuk) |
+| Lojban (`jbowiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-lojban) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-lojban) |
+| Gothic (`gotwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-gothic) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-gothic) |
+| Old English (`angwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-old-english) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-old-english) |
+| Classical Chinese (`zh_classicalwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-classical-chinese) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-classical-chinese) |
+| Aramaic (Syriac) (`arcwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-aramaic-syriac) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-aramaic-syriac) |
+| Dutch (`nlwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-dutch) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-dutch) |
+| Polish (`plwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-polish) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-polish) |
+| Waray (`warwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-waray) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-waray) |
+| Chechen (`cewiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-chechen) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-chechen) |
+| Serbian (`srwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-serbian) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-serbian) |
+| Turkish (`trwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-turkish) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-turkish) |
+| Greek (`elwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-greek) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-greek) |
+| Czech (`cswiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-czech) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-czech) |
+| Welsh (`cywiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-welsh) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-welsh) |
+| Thai (`thwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-thai) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-thai) |
+| Cebuano (`cebwiki`) | [Hugging Face](https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-cebuano) | [Kaggle](https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-cebuano) |
+
+The import batch is defined in [`bootstrap-additional-languages.yml`](.github/workflows/bootstrap-additional-languages.yml) and [`additional-languages.json`](config/additional-languages.json). It reuses the existing maximum of 16 initial shards, a/b recursive recovery, and post-publication artifact cleanup. Cebuano is included; its millions of mostly bot-created articles may be repetitive compared with human-written corpora.
+
+**Not included as active Wikimedia Wikipedia dumps:** Klingon (closed), Cree (closed), ǃXóõ / Taa (no identified active edition), and Tigre (no verified active edition). Scots uses the `scowiki` edition, and “Pidgin” includes both Tok Pisin and Nigerian Pidgin. Tigrinya is a different language from Tigre.
+
 ## Dataset format
 
 Each `.txt.gz` file is a standalone gzip-compressed UTF-8 text archive with a title, one cleaned article body, then a blank line for each article:
