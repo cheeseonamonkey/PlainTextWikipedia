@@ -10,6 +10,8 @@ import bz2
 import gzip
 import lzma
 import re
+import signal
+import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,34 +52,65 @@ def clean_wikitext(source: str) -> str:
     return re.sub(r"\s+", " ", plain).strip()
 
 
+class _ArticleConversionTimeout(Exception):
+    """One malformed article must not stall an entire multi-hour dump build."""
+
+
+def _article_timeout(signum: int, frame: object) -> None:
+    raise _ArticleConversionTimeout()
+
+
 def iter_articles(path: Path) -> Iterator[Article]:
-    """Yield current main-namespace, non-redirect articles from one XML file."""
-    with _open_dump(path) as stream:
-        events = ET.iterparse(stream, events=("start", "end"))
-        _, root = next(events)
-        for event, page in events:
-            if event != "end" or page.tag.rsplit("}", 1)[-1] != "page":
-                continue
-            try:
-                if _child_text(page, "ns") != "0":
-                    continue
-                if page.find("{*}redirect") is not None:
-                    continue
+    """Yield current main-namespace, non-redirect articles from one XML file.
 
-                title = (_child_text(page, "title") or "").strip()
-                page_id_text = (_child_text(page, "id") or "").strip()
-                revisions = page.findall("{*}revision")
-                revision = revisions[-1] if revisions else None
-                source = _child_text(revision, "text") if revision is not None else None
-                if not title or not page_id_text or not source:
+    Limit individual wikitext conversions on Linux runners so a malformed or
+    extremely expensive wiki page cannot stall the full corpus for six hours.
+    """
+    has_timer = hasattr(signal, "setitimer") and hasattr(signal, "SIGALRM")
+    previous_handler = signal.signal(signal.SIGALRM, _article_timeout) if has_timer else None
+    try:
+        with _open_dump(path) as stream:
+            events = ET.iterparse(stream, events=("start", "end"))
+            _, root = next(events)
+            for event, page in events:
+                if event != "end" or page.tag.rsplit("}", 1)[-1] != "page":
                     continue
+                try:
+                    if _child_text(page, "ns") != "0":
+                        continue
+                    if page.find("{*}redirect") is not None:
+                        continue
 
-                text = clean_wikitext(source)
-                if text:
-                    yield Article(int(page_id_text), title, text)
-            finally:
-                page.clear()
-                root.clear()  # Release completed siblings in very large dump files.
+                    title = (_child_text(page, "title") or "").strip()
+                    page_id_text = (_child_text(page, "id") or "").strip()
+                    revisions = page.findall("{*}revision")
+                    revision = revisions[-1] if revisions else None
+                    source = _child_text(revision, "text") if revision is not None else None
+                    if not title or not page_id_text or not source:
+                        continue
+
+                    if has_timer:
+                        signal.setitimer(signal.ITIMER_REAL, 15.0)
+                    try:
+                        text = clean_wikitext(source)
+                    except _ArticleConversionTimeout:
+                        print(
+                            f"WARNING: slow article skipped after 15s: {title!r} ({page_id_text})",
+                            file=sys.stderr, flush=True,
+                        )
+                        continue
+                    finally:
+                        if has_timer:
+                            signal.setitimer(signal.ITIMER_REAL, 0)
+                    if text:
+                        yield Article(int(page_id_text), title, text)
+                finally:
+                    page.clear()
+                    root.clear()  # Release completed siblings in very large dump files.
+    finally:
+        if has_timer:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
 
 
 def write_plaintext_shards(
