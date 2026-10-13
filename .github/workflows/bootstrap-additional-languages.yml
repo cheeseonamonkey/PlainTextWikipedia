@@ -1,0 +1,72 @@
+name: Build 42 additional Wikipedia languages
+run-name: Bootstrap 42 more Wikipedia editions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap-additional-languages.yml
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: bootstrap-extra-wikipedia-languages
+  cancel-in-progress: false
+
+jobs:
+  additional:
+    name: ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        language:
+          - arwiki
+          - jawiki
+          - shwiki
+          - fawiki
+          - svwiki
+          - ukwiki
+          - swwiki
+          - kowiki
+          - eowiki
+          - scowiki
+          - tokwiki
+          - hiwiki
+          - bnwiki
+          - urwiki
+          - nvwiki
+          - chrwiki
+          - euwiki
+          - lawiki
+          - tewiki
+          - tpiwiki
+          - pcmwiki
+          - viwiki
+          - mrwiki
+          - hawiki
+          - iowiki
+          - vowiki
+          - jbowiki
+          - gotwiki
+          - angwiki
+          - zh_classicalwiki
+          - arcwiki
+          - nlwiki
+          - plwiki
+          - warwiki
+          - cewiki
+          - srwiki
+          - trwiki
+          - elwiki
+          - cswiki
+          - cywiki
+          - thwiki
+          - cebwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: ${{ matrix.language }}
+    secrets: inherit
