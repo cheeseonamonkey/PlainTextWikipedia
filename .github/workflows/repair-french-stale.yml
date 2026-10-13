@@ -1,0 +1,59 @@
+name: Repair French Wikipedia stale September overlap
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/repair-french-stale.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: Rebuild only French shard 5 without September overlap
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: python -m pip install -r REQUIREMENTS.TXT huggingface_hub
+      - name: Download only shard 5's current French files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/download_page_ranges.py \
+            --base-url https://dumps.wikimedia.org/frwiki/latest \
+            --language frwiki --shard 4 --shard-count 10 \
+            --preserve-layout --output-dir ranges > ranges.txt
+          test -s ranges.txt
+      - name: Regenerate shard 5 and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t dumps < ranges.txt
+          python wiki_to_text.py "${dumps[@]}" output \
+            --output-name frwiki_05_of_10.txt.gz
+          gzip -t output/frwiki_05_of_10.txt.gz
+      - name: Preserve regenerated shard for 7 days
+        uses: actions/upload-artifact@v4
+        with:
+          name: regenerated-frwiki-5
+          path: output/frwiki_05_of_10.txt.gz
+          retention-days: 7
+          compression-level: 0
+      - name: Update HF dataset without touching the other nine shards
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+          path = "output/frwiki_05_of_10.txt.gz"
+          HfApi(token=os.environ["HF_TOKEN"]).upload_file(
+              repo_id="ffatty/plaintext-wikipedia-full-french",
+              repo_type="dataset", path_or_fileobj=path,
+              path_in_repo="data/frwiki_05_of_10.txt.gz",
+              commit_message="Correct stale September duplicate in French Wikipedia shard 5")
+          print("Updated French shard 5 on Hugging Face")
+          PY
