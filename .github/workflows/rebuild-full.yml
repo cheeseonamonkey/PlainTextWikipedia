@@ -180,17 +180,20 @@ jobs:
           echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL" >> "$GITHUB_ENV"
           echo "HF=$hf_id Kaggle=$kaggle_id"
       - name: Collect built shards
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: full-${{ inputs.language }}-*
           merge-multiple: true
           path: publish
-      - name: Losslessly repack small editions into 16 published archives
+      - name: Losslessly repack completed leaves into 16 published archives
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
           python scripts/repack_shards.py --directory publish --target 16
       - name: Inspect successful leaves, verify exact recovery coverage
+        if: always()
         id: inspect
         shell: bash
         run: |
@@ -332,9 +335,15 @@ jobs:
           KAGGLE_RESULT: ${{ steps.kaggle_publish.outcome }}
         run: |
           echo "HF publication: $HF_RESULT; Kaggle publication: $KAGGLE_RESULT"
-          if [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
-            echo "::error::At least one publishing destination failed"
+          if [[ "$HF_RESULT" == success || "$KAGGLE_RESULT" == success ]]; then
+            if [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
+              echo "::warning::A publisher failed; the other destination published successfully"
+            fi
+          elif [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
+            echo "::error::Both publishing destinations failed or were skipped"
             exit 1
+          else
+            echo "::warning::Both publishing destinations were skipped"
           fi
       - name: Delete run shard artifacts after confirmed publication
         if: ${{ always() && (steps.hf_publish.outcome == 'success' || steps.kaggle_publish.outcome == 'success') }}
