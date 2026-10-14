@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -24,6 +25,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+try:
+    from scripts.repack_existing_hf import repack_local, transform_manifest
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from repack_existing_hf import repack_local, transform_manifest
 
 
 HF_PREFIX = "https://huggingface.co"
@@ -162,13 +170,31 @@ def backfill(slug: str, name: str, outdir: Path, max_mb: int, publish: bool = Tr
                            f"exceeds maximum {max_mb} MiB or has unknown sizes")
     working = outdir / slug
     working.mkdir(parents=True, exist_ok=True)
+    source_dir = working / "source-archives"
+    source_dir.mkdir(exist_ok=True)
     for entry in files:
         path = entry["path"]
         sha = (entry.get("lfs") or {}).get("oid")
-        target = working / Path(path).name
+        target = source_dir / Path(path).name
+        # Reuse already downloaded archives from an earlier publication rather
+        # than fetching from Hugging Face a second time.
+        earlier = working / target.name
+        if not target.exists() and earlier.is_file():
+            try:
+                verify_file(earlier, sha)
+                os.link(earlier, target)
+            except (OSError,ValueError,EOFError):
+                pass
         print(f"Downloading/verifying {slug}: {target.name} ({entry.get('size',0)//1048576} MiB)",
               flush=True)
         download(repo, path, target, sha, entry.get("size"))
+    # Recreate the publication folder from immutable, checksum-verified source
+    # bytes. The --dir-mode skip flag keeps source-archives off Kaggle.
+    for path in working.glob("*.txt.gz"):
+        path.unlink()
+    for entry in files:
+        name=Path(entry["path"]).name
+        os.link(source_dir / name, working / name)
 
     old_manifest = None
     try:
@@ -177,17 +203,37 @@ def backfill(slug: str, name: str, outdir: Path, max_mb: int, publish: bool = Tr
             old_manifest = data
     except (OSError,ValueError):
         pass
+    generated = repack_local(working, 16, min_bytes=20 * 1024 * 1024)
+    if generated["changed"]:
+        print(f"Losslessly split {slug} to {len(generated['new_files'])} archive(s), "
+              "each at least 20 MiB compressed", flush=True)
+        if old_manifest:
+            old_manifest = transform_manifest(
+                old_manifest, generated["replacements"], generated["old_files"])
+        storage = {
+            "verified": "SHA-256 article-record reconstruction",
+            "source_archives": generated["old_files"],
+            "published_archives": generated["new_files"],
+            "replacements": generated["replacements"],
+        }
+        (working / "storage-repack.json").write_text(
+            json.dumps(storage, indent=2, ensure_ascii=False) + "\n")
+    else:
+        (working / "storage-repack.json").unlink(missing_ok=True)
     if old_manifest:
         (working / "build-manifest.json").write_text(
             json.dumps(old_manifest, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8")
+    else:
+        (working / "build-manifest.json").unlink(missing_ok=True)
     meta = dataset_metadata(slug, name, old_manifest)
     (working / "dataset-metadata.json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8")
     if publish:
         run_kaggle(meta["id"], working, name)
-    return {"dataset": meta["id"], "gzips": len(files), "bytes": total,
+    return {"dataset": meta["id"],
+            "gzips": len(list(working.glob("*.txt.gz"))), "bytes": total,
             "published": publish}
 
 
