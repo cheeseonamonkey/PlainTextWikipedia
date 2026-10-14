@@ -14,8 +14,8 @@ from pathlib import Path
 def inspect(language: str, expected: int, directory: Path) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     leaf_pattern = re.compile(
-        rf"^{re.escape(language)}_(\\d{{2}})([ab]*)_of_{expected:02d}"
-        rf"(?:_part(\\d{{2}})_of_(\\d{{2}}))?\\.txt\\.gz$"
+        rf"^{re.escape(language)}_(\d{{2}})([ab]*)_of_{expected:02d}"
+        rf"(?:_part(\d{{2}})_of_(\d{{2}}))?\.txt\.gz$"
     )
     manifest_pattern = re.compile(rf"^{re.escape(language)}_(\d{{2}})_of_{expected:02d}\.manifest\.json$")
     reports = {}
