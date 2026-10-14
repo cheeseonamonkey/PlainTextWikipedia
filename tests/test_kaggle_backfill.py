@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.kaggle_auth import candidates, verify_and_configure
-from scripts.kaggle_backfill import backfill, run_kaggle
+from scripts.kaggle_backfill import backfill, run_kaggle, FOUNDATION_LANGUAGES
 from scripts.repack_shards import repack, records
 
 
@@ -53,6 +53,14 @@ class KaggleAuthTests(unittest.TestCase):
                     verify_and_configure("fake","ffatty",home=root)
             self.assertFalse(list((root/".kaggle").iterdir()))
 
+
+class FoundationLanguagesTests(unittest.TestCase):
+    def test_original_large_edition_destinations_are_supported(self):
+        self.assertEqual(FOUNDATION_LANGUAGES["spanish"], "Spanish")
+        self.assertEqual(FOUNDATION_LANGUAGES["french"], "French")
+        self.assertEqual(FOUNDATION_LANGUAGES["chinese"], "Chinese")
+        self.assertEqual(FOUNDATION_LANGUAGES["portuguese"], "Portuguese")
+        self.assertEqual(FOUNDATION_LANGUAGES["english"], "English")
 
 class KaggleBackfillTests(unittest.TestCase):
     def test_archive_filename_does_not_replace_language_title(self):
