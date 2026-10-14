@@ -158,6 +158,30 @@ See [the one-shot 73-edition bootstrap workflow](.github/workflows/bootstrap-lan
 
 For linguistic research, distinguish human-authored material, translations, templated/bot-generated pages and stubs. Public Wikipedia text is useful but is **not** a replacement for community-produced or community-authorized language documentation.
 
+## Source discovery and output sharding
+
+The number of **original Wikimedia XML source files** is not the number of
+**published text shards**. Small Wikipedias may legitimately publish a single
+XML source file. Our publisher now targets **16 independently compressed text
+archives**, when there are enough articles, without re-downloading that XML
+sixteen times. Each repacked archive uses a `_part01_of_16` suffix and is
+verified against the complete original article sequence before the original is
+removed. The build manifest records how each output file was partitioned.
+
+When legacy `/latest/` XML isn't available, the planner probes Wikimedia's
+new [MediaWiki Content File Exports](https://wikitech.wikimedia.org/wiki/MediaWiki_Content_File_Exports).
+These monthly `mediawiki_content_current` snapshots contain current revision
+XML in independent page-ID ranges. We select a completed monthly snapshot only
+when its `SHA256SUMS` is present, and **verify every downloaded file against
+that SHA-256**. Any failed or corrupt download is reflected in the partial
+coverage manifest; it is never silently treated as complete.
+
+Do **not** remove a language merely because the official source is one file
+or because a current-month dump hasn't finished. Previous complete monthly
+snapshots are valid alternatives, marked with their snapshot date. We remove
+only malformed generated shard files during validation; deleting existing
+published datasets requires separate explicit review.
+
 ## Dataset format
 
 Each `.txt.gz` file is a standalone gzip-compressed UTF-8 text archive with a title, one cleaned article body, then a blank line for each article:
