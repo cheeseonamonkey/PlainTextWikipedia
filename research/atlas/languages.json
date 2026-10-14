@@ -1,13 +1,8 @@
 {
-  "description": "Balanced exploratory selection for a joint multilingual article embedding atlas; not a ranked measure of unique factual knowledge.",
+  "description": "Balanced initial 45-language index selection, for eventual full-corpus high-recall retrieval; visual samples must never limit indexed coverage.",
   "model": "BAAI/bge-m3",
   "dimensions": 1024,
   "seed": 20261013,
-  "target_articles_per_language": 1000,
-  "max_archives_per_language": 4,
-  "max_scan_per_archive": 20000,
-  "minimum_article_chars": 180,
-  "text_chars": 2400,
   "languages": [
     {
       "name": "English",
@@ -279,5 +274,25 @@
       "slug": "latin",
       "tier": "distinctive"
     }
-  ]
+  ],
+  "full_article_text": true,
+  "index_all_available_articles": true,
+  "chunking": {
+    "target_chars": 1050,
+    "overlap_chars": 180,
+    "minimum_chunk_chars": 100,
+    "keep_character_offsets": true
+  },
+  "retrieval": {
+    "preserve_source_text": true,
+    "store_lexical_index": true,
+    "store_dense_embeddings": true,
+    "retain_full_dimensional_vectors": true,
+    "project_to_2d_for_visualization_only": true
+  },
+  "visualization": {
+    "max_points_per_language": 1000,
+    "seed": 20261013,
+    "notes": "Sampling is applied ONLY to visualization after full-corpus indexing."
+  }
 }
