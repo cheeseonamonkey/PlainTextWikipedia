@@ -201,6 +201,10 @@ The normal full-language build targets up to **16** top-level shards (or fewer w
 - `enwiki_03a_of_16.txt.gz` and `enwiki_03b_of_16.txt.gz`: the two halves of failed root shard 3.
 - `enwiki_03ba_of_16.txt.gz` and `enwiki_03bb_of_16.txt.gz`: a further split of the `03b` half.
 
+**Source files are not output files.** Even when Wikimedia supplies just one source XML archive, the publisher can split its already converted articles into up to **16 gzip files** without redownloading or reconverting the XML. Those post-conversion archives receive a `_partNN_of_MM` suffix. SHA-256 reconstruction checks that no article bytes were lost or duplicated, and very small corpora are not padded with empty archives. Valid output from incomplete roots may also be split; their manifest retains `complete: false`.
+
+This applies to **new publishing runs**. Older Hugging Face or Kaggle releases that were uploaded before the repacking workflow retain their old archive layout until they are republished.
+
 These are **disjoint subsets**, not multiple copies of the same archive. Each dataset build includes an explicit coverage manifest; if recovery is incomplete, the dataset card identifies it as **PARTIAL**.
 
 ## Run locally
