@@ -17,17 +17,88 @@ permissions:
   contents: read
 
 jobs:
-  pilot:
+  completed-diversity-editions:
     if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         repo_id:
+          - ffatty/plaintext-wikipedia-full-hebrew
           - ffatty/plaintext-wikipedia-full-atikamekw
+          - ffatty/plaintext-wikipedia-full-cheyenne
           - ffatty/plaintext-wikipedia-full-inuktitut
+          - ffatty/plaintext-wikipedia-full-inupiaq
+          - ffatty/plaintext-wikipedia-full-nahuatl
+          - ffatty/plaintext-wikipedia-full-pipil-nawat
+          - ffatty/plaintext-wikipedia-full-quechua
+          - ffatty/plaintext-wikipedia-full-aymara
+          - ffatty/plaintext-wikipedia-full-guarani
+          - ffatty/plaintext-wikipedia-full-hawaiian
+          - ffatty/plaintext-wikipedia-full-maori
+          - ffatty/plaintext-wikipedia-full-tahitian
+          - ffatty/plaintext-wikipedia-full-tongan
+          - ffatty/plaintext-wikipedia-full-samoan
+          - ffatty/plaintext-wikipedia-full-central-dusun
+          - ffatty/plaintext-wikipedia-full-sakizaya
+          - ffatty/plaintext-wikipedia-full-atayal
+          - ffatty/plaintext-wikipedia-full-seediq
+          - ffatty/plaintext-wikipedia-full-amis
+          - ffatty/plaintext-wikipedia-full-paiwan
+          - ffatty/plaintext-wikipedia-full-breton
+          - ffatty/plaintext-wikipedia-full-irish
+          - ffatty/plaintext-wikipedia-full-scottish-gaelic
+          - ffatty/plaintext-wikipedia-full-cornish
+          - ffatty/plaintext-wikipedia-full-manx
+          - ffatty/plaintext-wikipedia-full-northern-sami
+          - ffatty/plaintext-wikipedia-full-inari-sami
+          - ffatty/plaintext-wikipedia-full-veps
+          - ffatty/plaintext-wikipedia-full-udmurt
+          - ffatty/plaintext-wikipedia-full-komi
+          - ffatty/plaintext-wikipedia-full-livvi-karelian
+          - ffatty/plaintext-wikipedia-full-komi-permyak
+          - ffatty/plaintext-wikipedia-full-meadow-mari
+          - ffatty/plaintext-wikipedia-full-hill-mari
+          - ffatty/plaintext-wikipedia-full-erzya
+          - ffatty/plaintext-wikipedia-full-moksha
+          - ffatty/plaintext-wikipedia-full-buryat
+          - ffatty/plaintext-wikipedia-full-kalmyk
+          - ffatty/plaintext-wikipedia-full-sakha
+          - ffatty/plaintext-wikipedia-full-tuvan
+          - ffatty/plaintext-wikipedia-full-altai
+          - ffatty/plaintext-wikipedia-full-gagauz
+          - ffatty/plaintext-wikipedia-full-karachay-balkar
+          - ffatty/plaintext-wikipedia-full-occitan
+          - ffatty/plaintext-wikipedia-full-aragonese
+          - ffatty/plaintext-wikipedia-full-asturian
+          - ffatty/plaintext-wikipedia-full-lombard
+          - ffatty/plaintext-wikipedia-full-piedmontese
+          - ffatty/plaintext-wikipedia-full-venetian
+          - ffatty/plaintext-wikipedia-full-neapolitan
+          - ffatty/plaintext-wikipedia-full-emilian-romagnol
+          - ffatty/plaintext-wikipedia-full-ligurian
+          - ffatty/plaintext-wikipedia-full-sardinian
+          - ffatty/plaintext-wikipedia-full-picard
+          - ffatty/plaintext-wikipedia-full-friulian
+          - ffatty/plaintext-wikipedia-full-arpitan
+          - ffatty/plaintext-wikipedia-full-norman
+          - ffatty/plaintext-wikipedia-full-mirandese
+          - ffatty/plaintext-wikipedia-full-extremaduran
+          - ffatty/plaintext-wikipedia-full-ladino
+          - ffatty/plaintext-wikipedia-full-corsican
+          - ffatty/plaintext-wikipedia-full-walloon
+          - ffatty/plaintext-wikipedia-full-standard-moroccan-amazigh
+          - ffatty/plaintext-wikipedia-full-shilha
+          - ffatty/plaintext-wikipedia-full-kabyle
+          - ffatty/plaintext-wikipedia-full-abkhaz
+          - ffatty/plaintext-wikipedia-full-kabardian
+          - ffatty/plaintext-wikipedia-full-adyghe
+          - ffatty/plaintext-wikipedia-full-tigrinya
+          - ffatty/plaintext-wikipedia-full-tigre
+          - ffatty/plaintext-wikipedia-full-romani
+          - ffatty/plaintext-wikipedia-full-uyghur
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       HF_REPO: ${{ matrix.repo_id }}
@@ -35,7 +106,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Hub client
         run: python -m pip install huggingface_hub
-      - name: Migrate existing gzip archives in place
+      - name: Migrate published archive layout without reconverting XML
         shell: bash
         run: |
           set -euo pipefail
