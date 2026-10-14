@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scripts.kaggle_auth import candidates, verify_and_configure
+from scripts.kaggle_backfill import backfill, run_kaggle
 from scripts.repack_shards import repack, records
 
 
@@ -51,6 +52,39 @@ class KaggleAuthTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     verify_and_configure("fake","ffatty",home=root)
             self.assertFalse(list((root/".kaggle").iterdir()))
+
+
+class KaggleBackfillTests(unittest.TestCase):
+    def test_archive_filename_does_not_replace_language_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            item={"path":"data/hiwiki_01_of_01.txt.gz","size":1024}
+            def fake_download(repo,remote,target,sha,size):
+                target.parent.mkdir(parents=True,exist_ok=True)
+                with gzip.open(target,"wb") as out:
+                    out.write(b"Title\\nBody\\n\\n")
+                return target
+            with (patch("scripts.kaggle_backfill.manifest_for",return_value=[item]),
+                  patch("scripts.kaggle_backfill.download",side_effect=fake_download),
+                  patch("scripts.kaggle_backfill.get_json",return_value={"complete":True})):
+                result=backfill("hindi","Hindi",root,1400,publish=False)
+            info=json.loads((root/"hindi"/"dataset-metadata.json").read_text())
+            self.assertEqual(info["title"],"Plaintext Wikipedia (Hindi)")
+            self.assertNotIn("hiwiki_01_of_01",info["title"])
+            self.assertEqual(result["gzips"],1)
+
+    def test_existing_dataset_is_versioned_and_waited_until_ready(self):
+        class Success:
+            returncode=0
+        with (patch("scripts.kaggle_backfill.kaggle_status",
+                    side_effect=[{"status":"ready","current_version_number":1},
+                                 {"status":"processing","current_version_number":2},
+                                 {"status":"ready","current_version_number":2}]),
+              patch("scripts.kaggle_backfill.subprocess.run",return_value=Success()) as proc,
+              patch("scripts.kaggle_backfill.time.sleep")):
+            run_kaggle("ffatty/plaintext-wikipedia-full-hindi",
+                       Path("/tmp/published-test"),"Hindi",wait_seconds=120)
+        self.assertTrue(any("version" in args[0] for args,kwargs in proc.call_args_list))
 
 
 class MinimumCompressedShardSizeTests(unittest.TestCase):

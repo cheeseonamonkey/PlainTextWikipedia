@@ -142,24 +142,55 @@ def dataset_metadata(slug: str, name: str, manifest: dict | None) -> dict:
     }
 
 
-def run_kaggle(dataset: str, work: Path, name: str) -> None:
+def kaggle_status(dataset: str) -> dict | None:
+    result = subprocess.run(
+        ["kaggle", "datasets", "status", dataset, "--format", "json"],
+        capture_output=True, text=True, timeout=90)
+    if result.returncode:
+        return None
+    try:
+        value = json.loads(result.stdout)
+        return value if isinstance(value, dict) else None
+    except ValueError:
+        return None
+
+
+def run_kaggle(dataset: str, work: Path, name: str,
+               wait_seconds: int = 1800) -> None:
     auth = subprocess.run(["kaggle", "datasets", "list", "--mine"],
                           capture_output=True, text=True, timeout=120)
     if auth.returncode:
         raise RuntimeError("Kaggle CLI not authenticated on this machine")
-    existing = subprocess.run(["kaggle", "datasets", "files", dataset],
-                              capture_output=True, text=True, timeout=90)
-    if existing.returncode == 0:
+    previous = kaggle_status(dataset)
+    previous_version = int((previous or {}).get("current_version_number") or 0)
+    if previous:
         args = ["kaggle", "datasets", "version", "-p", str(work),
                 "-m", f"Publish verified Wikipedia ({name}) corpus", "--dir-mode", "skip"]
     else:
         args = ["kaggle", "datasets", "create", "-p", str(work),
                 "--public", "--dir-mode", "skip"]
     subprocess.run(args, check=True, timeout=7200)
-    print(f"PUBLISHED: https://www.kaggle.com/datasets/{dataset}", flush=True)
+    # Kaggle create/version returns after upload, not necessarily after the
+    # server has finished processing the dataset. Never erase staging until
+    # that new version is actually ready.
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        current = kaggle_status(dataset)
+        if current:
+            status = str(current.get("status", "")).lower()
+            number = int(current.get("current_version_number") or 0)
+            if number > previous_version and status == "ready":
+                print(f"READY (version {number}): https://www.kaggle.com/datasets/{dataset}",
+                      flush=True)
+                return
+            if status in ("error", "failed", "failure"):
+                raise RuntimeError(f"Kaggle dataset {dataset} processing failed")
+        time.sleep(12)
+    raise TimeoutError(f"Kaggle accepted the upload but did not confirm a ready "
+                       f"new version within {wait_seconds}s; retaining staging files")
 
-
-def backfill(slug: str, name: str, outdir: Path, max_mb: int, publish: bool = True) -> dict:
+def backfill(slug: str, name: str, outdir: Path, max_mb: int,
+             publish: bool = True, keep_staging: bool = False) -> dict:
     if not re.fullmatch(r"[a-z0-9-]+", slug):
         raise ValueError("Invalid Wikipedia dataset slug")
     repo = f"{OWNER}/plaintext-wikipedia-full-{slug}"
@@ -193,8 +224,8 @@ def backfill(slug: str, name: str, outdir: Path, max_mb: int, publish: bool = Tr
     for path in working.glob("*.txt.gz"):
         path.unlink()
     for entry in files:
-        name=Path(entry["path"]).name
-        os.link(source_dir / name, working / name)
+        source_name=Path(entry["path"]).name
+        os.link(source_dir / source_name, working / source_name)
 
     old_manifest = None
     try:
@@ -230,11 +261,14 @@ def backfill(slug: str, name: str, outdir: Path, max_mb: int, publish: bool = Tr
     (working / "dataset-metadata.json").write_text(
         json.dumps(meta, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8")
+    n_archives=len(list(working.glob("*.txt.gz")))
     if publish:
         run_kaggle(meta["id"], working, name)
-    return {"dataset": meta["id"],
-            "gzips": len(list(working.glob("*.txt.gz"))), "bytes": total,
-            "published": publish}
+        if not keep_staging:
+            shutil.rmtree(working)
+            print(f"Deleted verified/published staging directory: {working}", flush=True)
+    return {"dataset": meta["id"], "gzips": n_archives,
+            "bytes": total, "published": publish}
 
 
 def main() -> None:
@@ -243,6 +277,8 @@ def main() -> None:
     p.add_argument("--output", type=Path, default=Path("/root/wiki-kaggle-stage"))
     p.add_argument("--max-mb", type=int, default=1400)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--keep-staging", action="store_true",
+                   help="Keep downloaded source and repacked local files after Kaggle ready")
     args = p.parse_args()
     entries = json.loads(
         (Path(__file__).resolve().parents[1]/"config"/"additional-languages.json").read_text()
@@ -256,7 +292,7 @@ def main() -> None:
             continue
         try:
             result = backfill(slug,names[slug],args.output,args.max_mb,
-                              publish=not args.dry_run)
+                              publish=not args.dry_run,keep_staging=args.keep_staging)
             print(json.dumps(result),flush=True)
         except Exception as exc:
             print(f"ERROR: {slug}: {type(exc).__name__}: {exc}", file=sys.stderr,flush=True)
