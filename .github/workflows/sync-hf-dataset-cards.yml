@@ -98,7 +98,7 @@ jobs:
                   f"status **{'COMPLETE' if source_complete else 'PARTIAL'}**. "
                   "See data/build-manifest.json for exact missing or incomplete ranges.\\n\\n"
               )
-              if int(manifest["published_archives"]) != len(shards):
+              if (manifest.get("published_archives") is not None\n                      and int(manifest["published_archives"]) != len(shards)):
                   note += (
                       "**Warning:** Archive count and the publication manifest disagree; "
                       "review before claiming a complete release.\\n\\n"
