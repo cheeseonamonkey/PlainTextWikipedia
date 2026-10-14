@@ -1,0 +1,20 @@
+name: Verify 16 published archives from a one-file Wikipedia
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-one-source-repack.yml
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  atikamekw:
+    name: Convert and publish Atikamekw in up to 16 output archives
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: atjwiki
+    secrets: inherit
