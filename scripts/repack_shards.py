@@ -110,8 +110,9 @@ def repack(directory: Path, target: int = 16) -> dict:
         return {"repacked":0,"files_before":0,"files_after":0,"reason":"No conversion manifests"}
     eligible = []
     for path, report in reports:
-        if not report.get("complete"):
-            continue  # Never rewrite incomplete or missing coverage.
+        # An incomplete root can still contain independently validated,
+        # successful leaves. Repacking those does not fill missing source
+        # coverage, and the 'complete' flag stays false.
         for leaf in report.get("successful_leaves", []):
             source = directory / leaf["file"]
             if source.is_file() and "_part" not in source.name:
@@ -119,7 +120,7 @@ def repack(directory: Path, target: int = 16) -> dict:
     current_count = sum(len(r.get("successful_leaves", [])) for _,r in reports)
     if current_count >= target or not eligible:
         return {"repacked":0,"files_before":current_count,
-                "files_after":current_count,"reason":"Already sharded or no complete inputs"}
+                "files_after":current_count,"reason":"Already sharded or no valid inputs"}
 
     # Divide the desired extra outputs among available original leaf archives,
     # preserving source-root recovery semantics. E.g. 1 input => 16 outputs,
