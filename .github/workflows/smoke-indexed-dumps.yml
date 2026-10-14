@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/smoke-indexed-dumps.yml
+      - scripts/multistream_shards.py
 
 permissions:
   contents: read
