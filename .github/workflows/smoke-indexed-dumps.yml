@@ -1,0 +1,65 @@
+name: Smoke-test indexed single-file Wikipedia dumps
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/smoke-indexed-dumps.yml
+
+permissions:
+  contents: read
+
+jobs:
+  indexed:
+    name: Check Basque multistream byte-range extraction
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASE_URL: https://dumps.wikimedia.org/euwiki/latest
+      LANGUAGE: euwiki
+    steps:
+      - uses: actions/checkout@v4
+      - name: Plan from live Wikimedia index
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/multistream_shards.py plan \
+            --base-url "$BASE_URL" --language "$LANGUAGE" \
+            --max-shards 16 > /tmp/plan.json
+          cat /tmp/plan.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          p=json.load(open('/tmp/plan.json'))
+          if p["mode"]!="indexed":
+              raise SystemExit("Live Basque indexed multistream unavailable; cannot verify byte-range extraction")
+          print(f"count={p['count']}")
+          print(f"size={p['archive_bytes']}")
+          PY
+      - name: Fetch and reconstruct one independent shard
+        shell: bash
+        env:
+          COUNT: ${{ steps.plan.outputs.count }}
+          SIZE: ${{ steps.plan.outputs.size }}
+        run: |
+          set -euo pipefail
+          python scripts/multistream_shards.py fetch \
+            --base-url "$BASE_URL" --language "$LANGUAGE" \
+            --shard 0 --count "$COUNT" --expected-size "$SIZE" \
+            --output-dir /tmp/ranges > /tmp/reconstructed-path
+          python - <<'PY'
+          import bz2, pathlib, xml.etree.ElementTree as ET
+          path=pathlib.Path(pathlib.Path('/tmp/reconstructed-path').read_text().strip())
+          count=0
+          with bz2.open(path,'rb') as src:
+              events=ET.iterparse(src,events=('start','end'))
+              _,root=next(events)
+              for event,element in events:
+                  if event=='end' and element.tag.rsplit('}',1)[-1]=='page':
+                      count+=1
+                      element.clear()
+                      root.clear()
+          assert count>0, "Reconstruction yielded no pages"
+          print(f"PASS: reconstructed {count:,} complete XML pages from a single HTTP byte range")
+          PY

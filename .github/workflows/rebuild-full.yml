@@ -38,6 +38,8 @@ jobs:
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
       count: ${{ steps.plan.outputs.count }}
+      mode: ${{ steps.plan.outputs.mode }}
+      archive_bytes: ${{ steps.plan.outputs.archive_bytes }}
     env:
       LANGUAGE: ${{ inputs.language }}
     steps:
@@ -48,15 +50,20 @@ jobs:
           set -euo pipefail
           [[ "$LANGUAGE" =~ ^[a-z][a-z0-9_-]*wiki$ ]] || exit 1
           . config/datasets.env
-          available="$(python scripts/download_page_ranges.py --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" --language "$LANGUAGE" --count-only)"
-          count="$FULL_SHARD_COUNT"
-          if (( available < count )); then count="$available"; fi
-          (( count > 0 ))
-          python - "$count" >> "$GITHUB_OUTPUT" <<'PY'
-          import json, sys
-          count = int(sys.argv[1])
-          print(f"count={count}")
-          print(f"shards={json.dumps(list(range(1, count + 1)))}")
+          plan="$(python scripts/multistream_shards.py plan \
+            --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
+            --language "$LANGUAGE" --max-shards "$FULL_SHARD_COUNT")"
+          python - "$plan" >> "$GITHUB_OUTPUT" <<'PY'
+          import json,sys
+          p=json.loads(sys.argv[1])
+          n=int(p["count"])
+          assert 1<=n<=64
+          print(f"count={n}")
+          print(f"shards={json.dumps(list(range(1,n+1)))}")
+          print(f"mode={p['mode']}")
+          print(f"archive_bytes={p['archive_bytes']}")
+          print(f"::notice::Wikipedia source: {p['reason']}, {n} planned shard jobs",
+                file=sys.stderr)
           PY
 
   build:
@@ -72,6 +79,8 @@ jobs:
       LANGUAGE: ${{ inputs.language }}
       SHARD: ${{ matrix.shard }}
       COUNT: ${{ needs.plan.outputs.count }}
+      MODE: ${{ needs.plan.outputs.mode }}
+      ARCHIVE_BYTES: ${{ needs.plan.outputs.archive_bytes }}
     steps:
       - uses: actions/checkout@v4
       - name: Install converter dependencies
@@ -80,11 +89,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/download_page_ranges.py \
-            --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
-            --language "$LANGUAGE" --shard "$((SHARD - 1))" \
-            --shard-count "$COUNT" --output-dir ranges \
-            --allow-partial --failures-file download-failures.json > ranges.txt
+          if [[ "$MODE" == "indexed" ]]; then
+            python scripts/multistream_shards.py fetch \
+              --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
+              --language "$LANGUAGE" --shard "$((SHARD - 1))" \
+              --count "$COUNT" --expected-size "$ARCHIVE_BYTES" \
+              --output-dir ranges > ranges.txt
+            printf '[]\n' > download-failures.json
+          else
+            python scripts/download_page_ranges.py \
+              --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
+              --language "$LANGUAGE" --shard "$((SHARD - 1))" \
+              --shard-count "$COUNT" --output-dir ranges \
+              --allow-partial --failures-file download-failures.json > ranges.txt
+          fi
+          test -s ranges.txt
       - name: Convert with recursive a/b splitting on failure
         shell: bash
         run: |
