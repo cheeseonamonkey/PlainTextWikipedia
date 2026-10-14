@@ -88,7 +88,7 @@ jobs:
           }
           for k, v in substitutions.items():
               card = card.replace(k, v)
-          note = f"## Dataset availability\\n\\n**{len(shards)} compressed archives currently published.** "
+          note = f"## Dataset availability\n\n**{len(shards)} compressed archives currently published.** "
           if manifest:
               expected_roots = int(manifest["expected_shards"])
               recovered_roots = int(manifest["published_shards"])
@@ -96,17 +96,18 @@ jobs:
               note += (
                   f"Source recovery: **{recovered_roots}/{expected_roots} roots**, "
                   f"status **{'COMPLETE' if source_complete else 'PARTIAL'}**. "
-                  "See data/build-manifest.json for exact missing or incomplete ranges.\\n\\n"
+                  "See data/build-manifest.json for exact missing or incomplete ranges.\n\n"
               )
-              if (manifest.get("published_archives") is not None\n                      and int(manifest["published_archives"]) != len(shards)):
+              if (manifest.get("published_archives") is not None
+                      and int(manifest["published_archives"]) != len(shards)):
                   note += (
                       "**Warning:** Archive count and the publication manifest disagree; "
-                      "review before claiming a complete release.\\n\\n"
+                      "review before claiming a complete release.\n\n"
                   )
           else:
               note += (
                   "A current source-coverage manifest is unavailable. "
-                  "**Archive count alone does not establish complete article coverage.**\\n\\n"
+                  "**Archive count alone does not establish complete article coverage.**\n\n"
               )
           card = card.replace("## Format", note + "## Format", 1)
           Path("README-publication.md").write_text(card, encoding="utf-8")
