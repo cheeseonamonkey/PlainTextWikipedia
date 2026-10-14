@@ -1,0 +1,50 @@
+name: Backfill a Wikipedia dataset to Kaggle
+
+on:
+  workflow_dispatch:
+    inputs:
+      language_slug:
+        description: "Configured language slug, e.g. hindi, japanese, hebrew"
+        required: true
+        type: string
+        default: hindi
+      max_source_mb:
+        description: "Maximum downloaded Hugging Face compressed data in MiB"
+        required: false
+        type: number
+        default: 4500
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaggle-backfill-${{ inputs.language_slug }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.language_slug }} from Hugging Face to Kaggle
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+      - name: Validate Kaggle account authentication
+        run: python scripts/kaggle_auth.py --owner ffatty
+      - name: Download, verify, repartition and publish existing corpus
+        shell: bash
+        env:
+          SLUG: ${{ inputs.language_slug }}
+          MAX_MB: ${{ inputs.max_source_mb }}
+        run: |
+          set -euo pipefail
+          python scripts/kaggle_backfill.py "$SLUG" \
+            --output "$RUNNER_TEMP/wiki-kaggle" \
+            --max-mb "$MAX_MB"
+      - name: Remove temporary corpus files
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/wiki-kaggle"
