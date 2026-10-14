@@ -1,0 +1,61 @@
+name: Repack existing Hugging Face Wikipedia archives
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_id:
+        description: "Existing Hugging Face dataset (ffatty/plaintext-wikipedia-full-...)"
+        required: true
+        default: ffatty/plaintext-wikipedia-full-atikamekw
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/repack-existing-hf.yml
+
+permissions:
+  contents: read
+
+jobs:
+  pilot:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        repo_id:
+          - ffatty/plaintext-wikipedia-full-atikamekw
+          - ffatty/plaintext-wikipedia-full-inuktitut
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_REPO: ${{ matrix.repo_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Hub client
+        run: python -m pip install huggingface_hub
+      - name: Migrate existing gzip archives in place
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HF_TOKEN"
+          python scripts/repack_existing_hf.py "$HF_REPO" --target 16 --max-source-mb 750 --apply
+
+  manual:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      HF_REPO: ${{ inputs.repo_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Hub client
+        run: python -m pip install huggingface_hub
+      - name: Migrate selected dataset in place
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HF_TOKEN"
+          python scripts/repack_existing_hf.py "$HF_REPO" --target 16 --max-source-mb 750 --apply
