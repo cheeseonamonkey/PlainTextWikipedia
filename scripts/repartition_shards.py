@@ -108,7 +108,10 @@ def repartition(language: str, root: int, roots: int, target: int, output: Path)
                              f"{overall} != {sum(known_counts)}")
         if not overall:
             raise ValueError("Refusing to claim completeness with zero articles")
-        for temp in temporaries:
+        for temp, n in zip(temporaries, totals):
+            if n == 0:
+                temp.unlink()
+                continue  # Never publish misleading empty archives.
             with gzip.open(temp, "rb") as stream:
                 while stream.read(1024 * 1024):
                     pass
@@ -122,6 +125,7 @@ def repartition(language: str, root: int, roots: int, target: int, output: Path)
                            "buckets_for_worker": len(ids), "method": "blake2b-64(title)%buckets"},
              "sources": [src for leaf in originals for src in leaf.get("sources", [])]}
             for bucket, (i, path, tmp, n) in enumerate(zip(ids, destinations, temporaries, totals))
+            if n > 0
         ]
         updated = dict(report, output_shards=target,
                        successful_leaves=new_leaves, repartitioned_articles=overall)
@@ -130,8 +134,9 @@ def repartition(language: str, root: int, roots: int, target: int, output: Path)
         new_report = report_path.with_suffix(report_path.suffix + ".pending")
         new_report.write_text(json.dumps(updated, indent=2, ensure_ascii=False) + "\n",
                               encoding="utf-8")
-        for temp, path in zip(temporaries, destinations):
-            temp.replace(path)
+        for temp, path, n in zip(temporaries, destinations, totals):
+            if n > 0:
+                temp.replace(path)
         new_report.replace(report_path)
         for path in inputs:
             path.unlink()
