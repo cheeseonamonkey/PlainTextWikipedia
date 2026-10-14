@@ -1,0 +1,62 @@
+name: Backfill verified Wikipedia editions to Kaggle
+run-name: Publish medium and overlooked Wikipedias to Kaggle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kaggle-backfill-medium.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wiki-kaggle-medium-batch
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: ${{ matrix.slug }} / Kaggle
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        slug:
+          - thai
+          - telugu
+          - marathi
+          - greek
+          - czech
+          - welsh
+          - esperanto
+          - latin
+          - serbian
+          - basque
+          - cebuano
+          - scots
+          - classical-chinese
+          - swahili
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+      - name: Verify authenticated Kaggle account
+        run: python scripts/kaggle_auth.py --owner ffatty
+      - name: Download verified corpus, enforce 20 MiB split minimum, and publish
+        shell: bash
+        env:
+          SLUG: ${{ matrix.slug }}
+        run: |
+          set -euo pipefail
+          python scripts/kaggle_backfill.py "$SLUG" \
+            --output "$RUNNER_TEMP/wiki-kaggle" \
+            --max-mb 4500
+      - name: Remove downloaded staging after job
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/wiki-kaggle"
