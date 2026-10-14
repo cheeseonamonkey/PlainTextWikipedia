@@ -1,0 +1,54 @@
+name: Smoke-test official monthly content exports
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/smoke-current-exports.yml
+
+permissions:
+  contents: read
+
+jobs:
+  current-xml:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find a completed Wikimedia monthly current XML export and validate source checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import bz2
+          import tempfile
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          from scripts.current_export import discover,download
+
+          found = None
+          for language in ("atjwiki","smnwiki","euwiki","hewiki"):
+              candidate = discover(language)
+              if candidate is not None:
+                  found = candidate
+                  break
+          if not found:
+              raise SystemExit("No complete official monthly current XML export found for smoke-test projects")
+          print(f"Using completed {found['project']} export dated {found['snapshot']} "
+                f"with {len(found['files'])} source files", flush=True)
+          with tempfile.TemporaryDirectory() as tmp:
+              targets, errors = download(found, 0, len(found['files']), Path(tmp), allow_partial=False)
+              assert not errors and len(targets)==1
+              pages=0
+              with bz2.open(targets[0],"rb") as stream:
+                  events=ET.iterparse(stream,events=("start","end"))
+                  _,root=next(events)
+                  for event,node in events:
+                      if event=="end" and node.tag.rsplit("}",1)[-1]=="page":
+                          pages+=1
+                          node.clear()
+                          root.clear()
+              assert pages > 0, "No valid XML pages in checksummed content export"
+              print(f"PASS: {pages:,} pages from {targets[0].name}; SHA-256 verified",flush=True)
+          PY
