@@ -224,8 +224,8 @@ def backfill(slug: str, name: str, outdir: Path, max_mb: int,
     for path in working.glob("*.txt.gz"):
         path.unlink()
     for entry in files:
-        name=Path(entry["path"]).name
-        os.link(source_dir / name, working / name)
+        source_name=Path(entry["path"]).name
+        os.link(source_dir / source_name, working / source_name)
 
     old_manifest = None
     try:
