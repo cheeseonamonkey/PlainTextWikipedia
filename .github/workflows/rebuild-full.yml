@@ -40,6 +40,7 @@ jobs:
       count: ${{ steps.plan.outputs.count }}
       mode: ${{ steps.plan.outputs.mode }}
       archive_bytes: ${{ steps.plan.outputs.archive_bytes }}
+      snapshot: ${{ steps.plan.outputs.snapshot }}
     env:
       LANGUAGE: ${{ inputs.language }}
     steps:
@@ -62,6 +63,7 @@ jobs:
           print(f"shards={json.dumps(list(range(1,n+1)))}")
           print(f"mode={p['mode']}")
           print(f"archive_bytes={p['archive_bytes']}")
+          print(f"snapshot={p.get('snapshot','')}")
           print(f"::notice::Wikipedia source: {p['reason']}, {n} planned shard jobs",
                 file=sys.stderr)
           PY
@@ -81,6 +83,7 @@ jobs:
       COUNT: ${{ needs.plan.outputs.count }}
       MODE: ${{ needs.plan.outputs.mode }}
       ARCHIVE_BYTES: ${{ needs.plan.outputs.archive_bytes }}
+      SNAPSHOT: ${{ needs.plan.outputs.snapshot }}
     steps:
       - uses: actions/checkout@v4
       - name: Install converter dependencies
@@ -96,6 +99,11 @@ jobs:
               --count "$COUNT" --expected-size "$ARCHIVE_BYTES" \
               --output-dir ranges > ranges.txt
             printf '[]\n' > download-failures.json
+          elif [[ "$MODE" == "current_export" ]]; then
+            python scripts/current_export.py fetch \
+              --language "$LANGUAGE" --shard "$((SHARD - 1))" \
+              --count "$COUNT" --snapshot "$SNAPSHOT" \
+              --output-dir ranges --failures-file download-failures.json > ranges.txt
           else
             python scripts/download_page_ranges.py \
               --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
@@ -177,6 +185,11 @@ jobs:
           pattern: full-${{ inputs.language }}-*
           merge-multiple: true
           path: publish
+      - name: Losslessly repack small editions into 16 published archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/repack_shards.py --directory publish --target 16
       - name: Inspect successful leaves, verify exact recovery coverage
         id: inspect
         shell: bash
