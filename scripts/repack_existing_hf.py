@@ -123,7 +123,15 @@ def migrate(repo_id: str, apply: bool = False, target: int = 16,
     if apply and not token:
         raise RuntimeError("HF_TOKEN required for writes")
     api = HfApi(token=token or None)
-    remote = set(api.list_repo_files(repo_id=repo_id, repo_type="dataset"))
+    from huggingface_hub.errors import RepositoryNotFoundError, HfHubHTTPError
+    try:
+        remote = set(api.list_repo_files(repo_id=repo_id, repo_type="dataset"))
+    except RepositoryNotFoundError:
+        return {"repo": repo_id, "status": "skip", "reason": "Dataset not published yet"}
+    except HfHubHTTPError as exc:
+        if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+            return {"repo": repo_id, "status": "skip", "reason": "Dataset not published yet"}
+        raise
     originals = sorted(x for x in remote if x.startswith("data/") and x.endswith(".txt.gz"))
     if not originals:
         return {"repo": repo_id, "status": "skip", "reason": "No published gzip archives"}
