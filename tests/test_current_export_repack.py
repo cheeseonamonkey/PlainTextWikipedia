@@ -106,6 +106,49 @@ class RepackTests(unittest.TestCase):
             self.assertEqual(sum(len(list(records(f))) for f in root.glob("*.txt.gz")),5)
             self.assertTrue(inspect("atjwiki",1,root)["complete"])
 
+    def test_multiple_root_archives_repack_without_losing_or_duplicating_articles(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            expected=[]
+            for number in (1,2):
+                filename=f"miwiki_{number:02d}_of_02.txt.gz"
+                with gzip.open(root/filename,"wb") as stream:
+                    for i in range(120):
+                        record=f"Article-{number}-{i}\\nBody {number}-{i}\\n\\n".encode()
+                        expected.append(record)
+                        stream.write(record)
+                manifest={
+                    "language":"miwiki","root_shard":number,"planned_shards":2,
+                    "complete":number==1,
+                    "failed_fragments":[] if number==1 else [{"segment":"missing-range"}],
+                    "download_failures":[],
+                    "successful_leaves":[{"file":filename,"articles":120}]
+                }
+                (root/f"miwiki_{number:02d}_of_02.manifest.json").write_text(
+                    json.dumps(manifest))
+            result=repack(root,16)
+            self.assertEqual(result["files_after"],16)
+            actual=[record for file in root.glob("*.txt.gz") for record in records(file)]
+            self.assertCountEqual(actual,expected)
+            coverage=inspect("miwiki",2,root)
+            self.assertEqual(coverage["published_archives"],16)
+            self.assertEqual(coverage["incomplete_shards"],[2])
+            self.assertFalse(coverage["complete"])
+
+    def test_corrupt_archive_is_not_deleted_by_failed_repacking(self):
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td)
+            path=self.make_file(root,20)
+            # Preserve a valid gzip header but corrupt/truncate one record.
+            with gzip.open(path,"wb") as output:
+                output.write(b"Title\\nMissing terminator\\n")
+            before=(root/"atjwiki_01_of_01.manifest.json").read_text()
+            with self.assertRaises(ValueError):
+                repack(root,16)
+            self.assertTrue(path.is_file())
+            self.assertEqual((root/"atjwiki_01_of_01.manifest.json").read_text(),before)
+            self.assertFalse(list(root.glob("*_part*.txt.gz")))
+
     def test_incomplete_edition_repackages_valid_leaves_without_claiming_completeness(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)
