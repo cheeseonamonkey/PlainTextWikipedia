@@ -648,6 +648,222 @@
       "project": "ugwiki",
       "slug": "uyghur",
       "collection": "heritage"
+    },
+    {
+      "name": "Indonesian",
+      "project": "idwiki",
+      "slug": "indonesian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Malay",
+      "project": "mswiki",
+      "slug": "malay",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Finnish",
+      "project": "fiwiki",
+      "slug": "finnish",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Danish",
+      "project": "dawiki",
+      "slug": "danish",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Romanian",
+      "project": "rowiki",
+      "slug": "romanian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Hungarian",
+      "project": "huwiki",
+      "slug": "hungarian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Croatian",
+      "project": "hrwiki",
+      "slug": "croatian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Bulgarian",
+      "project": "bgwiki",
+      "slug": "bulgarian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Slovak",
+      "project": "skwiki",
+      "slug": "slovak",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Slovenian",
+      "project": "slwiki",
+      "slug": "slovenian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Lithuanian",
+      "project": "ltwiki",
+      "slug": "lithuanian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Latvian",
+      "project": "lvwiki",
+      "slug": "latvian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Estonian",
+      "project": "etwiki",
+      "slug": "estonian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Icelandic",
+      "project": "iswiki",
+      "slug": "icelandic",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Armenian",
+      "project": "hywiki",
+      "slug": "armenian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Georgian",
+      "project": "kawiki",
+      "slug": "georgian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Azerbaijani",
+      "project": "azwiki",
+      "slug": "azerbaijani",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Uzbek",
+      "project": "uzwiki",
+      "slug": "uzbek",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Kazakh",
+      "project": "kkwiki",
+      "slug": "kazakh",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Mongolian",
+      "project": "mnwiki",
+      "slug": "mongolian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Afrikaans",
+      "project": "afwiki",
+      "slug": "afrikaans",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Albanian",
+      "project": "sqwiki",
+      "slug": "albanian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Belarusian",
+      "project": "bewiki",
+      "slug": "belarusian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Bosnian",
+      "project": "bswiki",
+      "slug": "bosnian",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Tagalog",
+      "project": "tlwiki",
+      "slug": "tagalog",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Punjabi",
+      "project": "pawiki",
+      "slug": "punjabi",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Tamil",
+      "project": "tawiki",
+      "slug": "tamil",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Kannada",
+      "project": "knwiki",
+      "slug": "kannada",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Malayalam",
+      "project": "mlwiki",
+      "slug": "malayalam",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Nepali",
+      "project": "newiki",
+      "slug": "nepali",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Amharic",
+      "project": "amwiki",
+      "slug": "amharic",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Somali",
+      "project": "sowiki",
+      "slug": "somali",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Yoruba",
+      "project": "yowiki",
+      "slug": "yoruba",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Igbo",
+      "project": "igwiki",
+      "slug": "igbo",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Zulu",
+      "project": "zuwiki",
+      "slug": "zulu",
+      "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Odia",
+      "project": "orwiki",
+      "slug": "odia",
+      "collection": "2026-october-expansion"
     }
   ]
 }
