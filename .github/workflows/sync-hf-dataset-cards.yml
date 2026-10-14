@@ -113,6 +113,6 @@ jobs:
           Path("README-publication.md").write_text(card, encoding="utf-8")
           api.upload_file(repo_id=repo, repo_type="dataset",
                           path_or_fileobj="README-publication.md", path_in_repo="README.md",
-                          commit_message=f'Sync {e["LANGUAGE"]} published shard count ({len(shards)}/{expected})')
-          print(f"Published metadata: https://huggingface.co/datasets/{repo}: {len(shards)}/{expected}")
+                          commit_message=f'Sync {e["LANGUAGE"]} publication inventory ({len(shards)} archives)')
+          print(f"Published metadata: https://huggingface.co/datasets/{repo}: {len(shards)} archives")
           PY
