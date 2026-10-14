@@ -79,7 +79,12 @@ def audit_one(repo: str, apply: bool = False) -> dict:
         path = hf_hub_download(repo_id=repo, repo_type="dataset",
                                filename="data/build-manifest.json",
                                token=os.environ.get("HF_TOKEN") or None)
-        referenced = manifest_files(json.loads(Path(path).read_text("utf-8")))
+        document = json.loads(Path(path).read_text("utf-8"))
+        # Old manifest formats lacking per-root file references are not
+        # sufficient evidence that an apparently orphaned file is disposable.
+        referenced = (manifest_files(document)
+                      if isinstance(document.get("roots"), list) and document["roots"]
+                      else None)
     else:
         referenced = None  # Cannot establish safely that a candidate is orphaned.
     plan = classify(sizes, referenced)
