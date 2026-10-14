@@ -1,0 +1,41 @@
+name: Audit and clean verified empty Hugging Face Wiki shards
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/audit-empty-hf-shards.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-empty-hf-shards
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Hub client
+        run: python -m pip install huggingface_hub
+      - name: Validate historical archives and delete only confirmed empty unreferenced files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HF_TOKEN"
+          python scripts/audit_empty_hf_shards.py \
+            --apply --workers 4 --report empty-shard-audit.json
+      - name: Publish audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: empty-shard-audit
+          path: empty-shard-audit.json
+          if-no-files-found: warn
+          retention-days: 7
