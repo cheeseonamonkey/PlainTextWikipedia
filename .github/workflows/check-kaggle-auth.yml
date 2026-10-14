@@ -1,0 +1,30 @@
+name: Check Kaggle publishing credentials
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/check-kaggle-auth.yml
+      - scripts/kaggle_auth.py
+
+permissions:
+  contents: read
+
+jobs:
+  credential-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+      - name: Verify authenticated account access without exposing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/kaggle_auth.py --owner ffatty
+          kaggle datasets list --mine --page-size 2 >/dev/null
+          echo "Kaggle credential preflight passed"

@@ -70,7 +70,7 @@ def transform_manifest(manifest: dict, replacements: dict[str, list[dict]],
     return updated
 
 
-def repack_local(directory: Path, target: int = 16) -> dict:
+def repack_local(directory: Path, target: int = 16, min_bytes: int = 0) -> dict:
     """Pure local portion. Inputs are already downloaded data/*.txt.gz files."""
     initial = sorted(p for p in directory.glob("*.txt.gz") if p.is_file())
     if not 1 <= len(initial) < target:
@@ -84,7 +84,7 @@ def repack_local(directory: Path, target: int = 16) -> dict:
             "successful_leaves": [{"file": source.name}],
         }
         (directory / f"storage-{i:03d}.manifest.json").write_text(json.dumps(report))
-    result = repack(directory, target)
+    result = repack(directory, target, min_bytes=min_bytes)
     replacements = {}
     files = sorted(directory.glob("*.txt.gz"))
     for source in initial:
@@ -113,7 +113,7 @@ def repack_local(directory: Path, target: int = 16) -> dict:
 
 
 def migrate(repo_id: str, apply: bool = False, target: int = 16,
-            max_source_mb: int = 750) -> dict:
+            max_source_mb: int = 750, min_mb: int = 20) -> dict:
     if not re.fullmatch(r"ffatty/[a-z0-9._-]+", repo_id):
         raise ValueError("Only the configured ffatty dataset namespace is allowed")
     if not 2 <= target <= 64:
@@ -155,7 +155,7 @@ def migrate(repo_id: str, apply: bool = False, target: int = 16,
             local = Path(hf_hub_download(repo_id=repo_id, filename=path,
                                         repo_type="dataset", token=token or None))
             shutil.copyfile(local, root / Path(path).name)
-        generated = repack_local(root, target)
+        generated = repack_local(root, target, min_bytes=min_mb * 1024 * 1024)
         if not generated["changed"]:
             return {"repo": repo_id, "status": "skip", "reason": "Not enough article records"}
         replaced = generated["replacements"]
@@ -234,8 +234,11 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--target", type=int, default=16)
     parser.add_argument("--max-source-mb", type=int, default=750)
+    parser.add_argument("--min-mb", type=int, default=20,
+                        help="Minimum compressed MiB for new split archives")
     args = parser.parse_args()
-    print(json.dumps(migrate(args.repo, args.apply, args.target, args.max_source_mb), indent=2))
+    print(json.dumps(migrate(args.repo, args.apply, args.target,
+                             args.max_source_mb, args.min_mb), indent=2))
 
 
 if __name__ == "__main__":

@@ -201,6 +201,10 @@ The normal full-language build targets up to **16** top-level shards (or fewer w
 - `enwiki_03a_of_16.txt.gz` and `enwiki_03b_of_16.txt.gz`: the two halves of failed root shard 3.
 - `enwiki_03ba_of_16.txt.gz` and `enwiki_03bb_of_16.txt.gz`: a further split of the `03b` half.
 
+**Compressed output sizing:** New publication runs split completed archives only when they can produce shards of at least **20 MiB compressed**, and never produce more than **16** files through the post-conversion repacker. A 3 MiB or 35 MiB small-language edition generally stays a single archive; a much larger archive can be split while preserving exact article bytes. Historic releases repacked before this rule may still contain tiny gzip files.
+
+**Kaggle backfill:** Authenticated machines can publish already-available, SHA-256-verified Hugging Face files directly using `python scripts/kaggle_backfill.py swahili hindi korean --output /root/wiki-kaggle-stage`, avoiding another Wikimedia dump conversion. CI checks the actual Kaggle credentials first and supports both legacy API keys and modern Kaggle access tokens.
+
 **Source files are not output files.** Even when Wikimedia supplies just one source XML archive, the publisher can split its already converted articles into up to **16 gzip files** without redownloading or reconverting the XML. Those post-conversion archives receive a `_partNN_of_MM` suffix. SHA-256 reconstruction checks that no article bytes were lost or duplicated, and very small corpora are not padded with empty archives. Valid output from incomplete roots may also be split; their manifest retains `complete: false`.
 
 This applies to **new publishing runs**. Older Hugging Face or Kaggle releases that were uploaded before the repacking workflow retain their old archive layout until they are republished.
