@@ -106,7 +106,7 @@ class RepackTests(unittest.TestCase):
             self.assertEqual(sum(len(list(records(f))) for f in root.glob("*.txt.gz")),5)
             self.assertTrue(inspect("atjwiki",1,root)["complete"])
 
-    def test_incomplete_edition_retains_partial_leaf_without_repacking(self):
+    def test_incomplete_edition_repackages_valid_leaves_without_claiming_completeness(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)
             self.make_file(root,20)
@@ -116,8 +116,13 @@ class RepackTests(unittest.TestCase):
             report["failed_fragments"]=[{"segment":"b"}]
             p.write_text(json.dumps(report))
             result=repack(root,16)
-            self.assertEqual(result["repacked"],0)
-            self.assertEqual(len(list(root.glob("*.txt.gz"))),1)
+            self.assertEqual(result["repacked"],1)
+            self.assertEqual(result["files_after"],16)
+            self.assertEqual(len(list(root.glob("*.txt.gz"))),16)
+            manifest=inspect("atjwiki",1,root)
+            self.assertFalse(manifest["complete"])
+            self.assertEqual(manifest["incomplete_shards"],[1])
+            self.assertEqual(manifest["published_archives"],16)
 
 if __name__ == "__main__":
     unittest.main()
