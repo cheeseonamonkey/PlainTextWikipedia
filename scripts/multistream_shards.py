@@ -39,6 +39,13 @@ except ModuleNotFoundError as exc:
         raise
     from download_page_ranges import page_range_catalog, latest_page_ranges, USER_AGENT
 
+try:
+    from scripts.current_export import discover as discover_current
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from current_export import discover as discover_current
+
 MIN_INDEXED_SIZE = 128 * 1024 * 1024
 TARGET_BYTES_PER_JOB = 128 * 1024 * 1024
 PAGE_OPEN = b"<page>"
@@ -142,35 +149,51 @@ def boundaries(streams: list[tuple[int, int]], size: int, count: int) -> list[tu
 
 
 def plan(base: str, language: str, max_shards: int) -> dict:
-    """Prefer original numbered page-range files, then safe indexed fallback."""
-    catalog = page_range_catalog(base, language)
-    current = latest_page_ranges(catalog)
+    """Prefer verified numbered files, then indexed or modern XML exports."""
+    try:
+        catalog = page_range_catalog(base, language)
+        current = latest_page_ranges(catalog)
+    except OSError as exc:
+        print(f"::warning::Legacy dump listing unavailable: {exc}", file=sys.stderr)
+        current = []
     numbered = [x for x in current if re.search(r"\.xml-p\d+p\d+\.bz2$", x[2])]
     if numbered:
-        return {"mode": "normal", "count": min(max_shards, len(current)),
-                "archive_bytes": 0, "reason": "official numbered page-range dumps"}
-    whole, idx = paths(base, language)
-    # If Range is unavailable, original complete single-file conversion remains
-    # correct and avoids duplicate downloads.
+        return {"mode":"normal", "count":min(max_shards,len(current)),
+                "archive_bytes":0,"snapshot":"",
+                "reason":"official numbered page-range dumps"}
+
+    # Indexed multistream has disjoint HTTP byte ranges and is preferred for
+    # medium/large one-file dumps. Never download a full archive in every job.
+    whole, idx = paths(base,language)
     supported, size = byte_range_available(whole)
     if supported and size >= MIN_INDEXED_SIZE:
         try:
             streams = index_streams(idx)
-            count = min(max_shards, len(streams),
-                        max(2, math.ceil(size / TARGET_BYTES_PER_JOB)))
-            if count > 1:
-                boundaries(streams, size, count)
-                return {"mode": "indexed", "count": count,
-                        "archive_bytes": size,
-                        "reason": "indexed multistream HTTP byte-range partition"}
-        except (OSError, ValueError, EOFError) as exc:
-            print(f"WARNING: Indexed partition unavailable: {exc}", file=sys.stderr)
-    if not current:
-        raise RuntimeError("Neither numbered, single-file, nor usable indexed dump found")
-    return {"mode": "normal", "count": min(max_shards, len(current)),
-            "archive_bytes": 0,
-            "reason": "single-file archive: indexed sharding not available or unnecessary"}
+            count = min(max_shards,len(streams),
+                        max(2,math.ceil(size/TARGET_BYTES_PER_JOB)))
+            if count>1:
+                boundaries(streams,size,count)
+                return {"mode":"indexed", "count":count,"archive_bytes":size,
+                        "snapshot":"",
+                        "reason":"indexed multistream HTTP byte-range partition"}
+        except (OSError,ValueError,EOFError) as exc:
+            print(f"::warning::Indexed partition unavailable: {exc}",file=sys.stderr)
 
+    # New Wikimedia Content File Exports provide current XML pages in
+    # independently checksummed files. Crucially, the checksum manifest appears
+    # only after a snapshot has finished. It also works when legacy XML is 404.
+    fresh = discover_current(language)
+    if fresh and (len(fresh["files"]) > 1 or not current):
+        return {"mode":"current_export",
+                "count":min(max_shards,len(fresh["files"])),
+                "archive_bytes":0,"snapshot":fresh["snapshot"],
+                "reason":"monthly checksummed current-content XML export"}
+
+    if not current:
+        raise RuntimeError("No complete legacy, indexed, or monthly current XML dump found")
+    return {"mode":"normal", "count":min(max_shards,len(current)),
+            "archive_bytes":0,"snapshot":"",
+            "reason":"small single-file legacy XML dump (post-conversion splitting)"}
 
 def fetch(base: str, language: str, shard: int, count: int,
           expected_size: int, output_dir: Path) -> Path:
