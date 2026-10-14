@@ -191,7 +191,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/repack_shards.py --directory publish --target 16
+          python scripts/repack_shards.py --directory publish --target 16 --min-mb 20
       - name: Inspect successful leaves, verify exact recovery coverage
         if: always()
         id: inspect
@@ -293,13 +293,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install kaggle
-          if [[ "$KAGGLE_TOKEN" == \{* ]]; then
-            mkdir -p "$HOME/.kaggle"
-            printf '%s' "$KAGGLE_TOKEN" > "$HOME/.kaggle/kaggle.json"
-            chmod 600 "$HOME/.kaggle/kaggle.json"
-          else
-            export KAGGLE_API_TOKEN="$KAGGLE_TOKEN"
-          fi
+          python scripts/kaggle_auth.py --owner "${FULL_KAGGLE_DATASET%%/*}"
           python - <<'PY'
           import json, os
           from pathlib import Path
