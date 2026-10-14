@@ -88,6 +88,45 @@ class CoverageManifestTests(unittest.TestCase):
             self.assertFalse(manifest["complete"])
             self.assertFalse(list(output.glob("*.manifest.json")))
 
+    def test_empty_gzip_is_removed_and_never_claimed_complete(self):
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td)
+            file = output / "hawwiki_01_of_01.txt.gz"
+            with gzip.open(file, "wb"):
+                pass  # Valid compressed gzip container, but zero articles.
+            report = {
+                "language": "hawwiki", "root_shard": 1, "planned_shards": 1,
+                "complete": True, "successful_leaves": [{"file": file.name}],
+                "failed_fragments": [], "download_failures": [],
+            }
+            (output / "hawwiki_01_of_01.manifest.json").write_text(json.dumps(report))
+            result = inspect("hawwiki", 1, output)
+            self.assertFalse(file.exists())
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["published_archives"], 0)
+            self.assertEqual(result["missing_shards"], [1])
+
+    def test_empty_recovered_child_does_not_hide_valid_sibling(self):
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td)
+            name_a, name_b = "atjwiki_01a_of_01.txt.gz", "atjwiki_01b_of_01.txt.gz"
+            with gzip.open(output / name_a, "wb") as stream:
+                stream.write(b"Title\\nBody\\n\\n")
+            with gzip.open(output / name_b, "wb"):
+                pass
+            report = {
+                "language": "atjwiki", "root_shard": 1, "planned_shards": 1,
+                "complete": True, "successful_leaves": [{"file": name_a}, {"file": name_b}],
+                "failed_fragments": [], "download_failures": [],
+            }
+            (output / "atjwiki_01_of_01.manifest.json").write_text(json.dumps(report))
+            result = inspect("atjwiki", 1, output)
+            self.assertFalse(result["complete"])
+            self.assertEqual(result["published_archives"], 1)
+            self.assertEqual(result["incomplete_shards"], [1])
+            self.assertFalse((output / name_b).exists())
+            self.assertTrue((output / name_a).exists())
+
     def test_complete_split_has_all_leaf_archives(self):
         with tempfile.TemporaryDirectory() as td:
             output = Path(td)

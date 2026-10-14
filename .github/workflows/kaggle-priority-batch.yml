@@ -1,0 +1,55 @@
+name: Publish priority Wikipedia editions to Kaggle
+run-name: Kaggle backfill — 8 existing verified Wikipedias
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kaggle-priority-batch.yml
+
+permissions:
+  contents: read
+
+# Keep publication independent of long-running XML conversion. One failure
+# cannot cancel another wiki; the user's VPS sessions are not involved.
+concurrency:
+  group: kaggle-priority-batch
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: Kaggle — ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - {slug: portuguese, language: Portuguese}
+          - {slug: dutch, language: Dutch}
+          - {slug: czech, language: Czech}
+          - {slug: greek, language: Greek}
+          - {slug: thai, language: Thai}
+          - {slug: telugu, language: Telugu}
+          - {slug: marathi, language: Marathi}
+          - {slug: welsh, language: Welsh}
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      SLUG: ${{ matrix.slug }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+      - name: Verify credential before downloading
+        run: python scripts/kaggle_auth.py --owner ffatty
+      - name: Fetch and verify existing Hugging Face archives, repack at 20 MiB, publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/kaggle_backfill.py "$SLUG" \
+            --output "$RUNNER_TEMP/wiki-kaggle-stage" --max-mb 2500
+      - name: Remove runner staging after confirmed publication
+        if: ${{ success() }}
+        run: rm -rf "$RUNNER_TEMP/wiki-kaggle-stage"

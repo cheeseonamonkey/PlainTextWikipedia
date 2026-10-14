@@ -60,6 +60,11 @@ def inspect(language: str, expected: int, directory: Path) -> dict:
             continue
         try:
             with gzip.open(file, "rb") as stream:
+                first = stream.read(1)
+                if not first:
+                    print(f"::warning::Empty gzip article shard {file.name}, excluding")
+                    file.unlink()
+                    continue
                 while stream.read(8 * 1024 * 1024):
                     pass
         except (OSError, EOFError) as exc:
