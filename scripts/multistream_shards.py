@@ -31,7 +31,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from scripts.download_page_ranges import page_range_catalog, latest_page_ranges, USER_AGENT
+# Works both as python -m scripts.multistream_shards and as an executable script.
+try:
+    from scripts.download_page_ranges import page_range_catalog, latest_page_ranges, USER_AGENT
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from download_page_ranges import page_range_catalog, latest_page_ranges, USER_AGENT
 
 MIN_INDEXED_SIZE = 128 * 1024 * 1024
 TARGET_BYTES_PER_JOB = 128 * 1024 * 1024

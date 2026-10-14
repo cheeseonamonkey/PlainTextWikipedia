@@ -1,5 +1,7 @@
 import bz2
 import io
+import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -10,6 +12,13 @@ from scripts.multistream_shards import boundaries, fetch, plan
 
 
 class IndexedDumpTests(unittest.TestCase):
+    def test_direct_script_cli_imports_successfully(self):
+        result = subprocess.run(
+            [sys.executable, "scripts/multistream_shards.py", "--help"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("plan", result.stdout)
+
     def test_partition_is_complete_nonoverlapping_and_page_ordered(self):
         streams = [(10 + i * 100, 1 + i * 100) for i in range(30)]
         pieces = boundaries(streams, 3020, 8)
