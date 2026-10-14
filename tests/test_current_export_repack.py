@@ -10,6 +10,7 @@ from unittest.mock import patch
 from scripts.current_export import parse_manifest, partition, download, months_before
 from scripts.repack_shards import records, repack
 from scripts.inspect_adaptive import inspect
+from scripts.convert_adaptive import Source, split_sources
 
 
 class MonthlyContentExportTests(unittest.TestCase):
@@ -57,6 +58,14 @@ class MonthlyContentExportTests(unittest.TestCase):
             self.assertFalse(good)
             self.assertEqual(len(failed),1)
             self.assertFalse(list(Path(tmp).glob("*.bz2")))
+
+
+class MonthlyPageRangeTests(unittest.TestCase):
+    def test_modern_xml_filename_can_split_recursively(self):
+        source=Source(Path("atjwiki-2026-09-01-p100p199.xml.bz2"))
+        left,right=split_sources([source])
+        self.assertEqual((left[0].low,left[0].high),(100,149))
+        self.assertEqual((right[0].low,right[0].high),(150,199))
 
 
 class RepackTests(unittest.TestCase):
