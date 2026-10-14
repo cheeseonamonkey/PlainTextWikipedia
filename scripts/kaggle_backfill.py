@@ -36,6 +36,15 @@ except ModuleNotFoundError as exc:
 
 HF_PREFIX = "https://huggingface.co"
 OWNER = "ffatty"
+# These first ten editions are maintained in config/datasets.env rather than
+# additional-languages.json. Preserve the original exact dataset slugs.
+FOUNDATION_LANGUAGES = {
+    "english": "English", "norwegian": "Norwegian",
+    "spanish": "Spanish", "french": "French",
+    "german": "German", "italian": "Italian",
+    "portuguese": "Portuguese", "russian": "Russian",
+    "chinese": "Chinese",
+}
 USER_AGENT = "PlainTextWikipedia/1.0 (https://github.com/cheeseonamonkey/PlainTextWikipedia)"
 
 
@@ -283,7 +292,8 @@ def main() -> None:
     entries = json.loads(
         (Path(__file__).resolve().parents[1]/"config"/"additional-languages.json").read_text()
     )["languages"]
-    names = {entry["slug"]: entry["name"] for entry in entries}
+    names = {**FOUNDATION_LANGUAGES,
+             **{entry["slug"]: entry["name"] for entry in entries}}
     failed=[]
     for slug in args.slugs:
         if slug not in names:
