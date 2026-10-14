@@ -38,24 +38,46 @@ def inspect(language: str, expected: int, directory: Path) -> dict:
             print(f"::warning::Invalid recovery manifest {file.name}: {exc}")
             file.unlink()
 
+    # Files may have a different numbering scheme from source workers.
+    # The per-root manifest is the source of truth; no guessing ownership from
+    # output shard names (which are global and may exceed the worker count).
+    ownership = {}
+    duplicates = set()
+    for root, report in reports.items():
+        published_count = int(report.get("output_shards", expected))
+        if not expected <= published_count <= 64:
+            print(f"::warning::Invalid requested output shard count for root {root}")
+            continue
+        for leaf in report.get("successful_leaves", []):
+            name = leaf.get("file", "")
+            partition = leaf.get("partition")
+            if partition:
+                m = re.fullmatch(
+                    rf"{re.escape(language)}_(\\d{{2}})_of_{published_count:02d}\\.txt\\.gz",
+                    name)
+                if (not m or int(m.group(1)) not in range(root, published_count + 1, expected)
+                        or partition.get("root") != root):
+                    print(f"::warning::Invalid output partition {name}")
+                    continue
+            else:
+                m = leaf_pattern.fullmatch(name)
+                if not m or int(m.group(1)) != root:
+                    print(f"::warning::Invalid recovery leaf {name}")
+                    continue
+                if m.group(3) is not None:
+                    part, parts = int(m.group(3)), int(m.group(4))
+                    if not 1 <= part <= parts <= 64:
+                        continue
+            if name in ownership:
+                duplicates.add(name)
+            else:
+                ownership[name] = root
+
     valid = {}
     for file in sorted(directory.glob("*.txt.gz")):
-        m = leaf_pattern.fullmatch(file.name)
-        if not m or not 1 <= int(m.group(1)) <= expected:
-            print(f"::warning::Unexpected archive {file.name}, excluding")
-            file.unlink()
-            continue
-        root = int(m.group(1))
-        if m.group(3) is not None:
-            part, parts = int(m.group(3)), int(m.group(4))
-            if not (1 <= part <= parts <= 64):
-                print(f"::warning::Invalid repacked leaf {file.name}")
-                file.unlink()
-                continue
-        report = reports.get(root)
-        named = {leaf["file"] for leaf in report.get("successful_leaves", [])} if report else set()
-        if file.name not in named:
-            print(f"::warning::Untracked leaf archive {file.name}, excluding")
+        root = ownership.get(file.name)
+        if root is None or file.name in duplicates:
+            print(f"::warning::Untracked or conflicting leaf {file.name}, excluding")
             file.unlink()
             continue
         try:
@@ -103,6 +125,7 @@ def inspect(language: str, expected: int, directory: Path) -> dict:
         "expected_shards": expected,
         "published_shards": len(present),
         "published_archives": sum(len(files) for files in valid.values()),
+        "planned_output_shards": max((r.get("output_shards", expected) for r in reports.values()), default=expected),
         "present_shards": present,
         "missing_shards": missing,
         "incomplete_shards": incomplete,
