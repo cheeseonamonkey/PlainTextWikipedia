@@ -1,0 +1,283 @@
+{
+  "description": "Balanced exploratory selection for a joint multilingual article embedding atlas; not a ranked measure of unique factual knowledge.",
+  "model": "BAAI/bge-m3",
+  "dimensions": 1024,
+  "seed": 20261013,
+  "target_articles_per_language": 1000,
+  "max_archives_per_language": 4,
+  "max_scan_per_archive": 20000,
+  "minimum_article_chars": 180,
+  "text_chars": 2400,
+  "languages": [
+    {
+      "name": "English",
+      "project": "enwiki",
+      "slug": "english",
+      "tier": "major"
+    },
+    {
+      "name": "German",
+      "project": "dewiki",
+      "slug": "german",
+      "tier": "major"
+    },
+    {
+      "name": "French",
+      "project": "frwiki",
+      "slug": "french",
+      "tier": "major"
+    },
+    {
+      "name": "Spanish",
+      "project": "eswiki",
+      "slug": "spanish",
+      "tier": "major"
+    },
+    {
+      "name": "Russian",
+      "project": "ruwiki",
+      "slug": "russian",
+      "tier": "major"
+    },
+    {
+      "name": "Chinese",
+      "project": "zhwiki",
+      "slug": "chinese",
+      "tier": "major"
+    },
+    {
+      "name": "Japanese",
+      "project": "jawiki",
+      "slug": "japanese",
+      "tier": "major"
+    },
+    {
+      "name": "Arabic",
+      "project": "arwiki",
+      "slug": "arabic",
+      "tier": "major"
+    },
+    {
+      "name": "Portuguese",
+      "project": "ptwiki",
+      "slug": "portuguese",
+      "tier": "major"
+    },
+    {
+      "name": "Italian",
+      "project": "itwiki",
+      "slug": "italian",
+      "tier": "major"
+    },
+    {
+      "name": "Dutch",
+      "project": "nlwiki",
+      "slug": "dutch",
+      "tier": "major"
+    },
+    {
+      "name": "Polish",
+      "project": "plwiki",
+      "slug": "polish",
+      "tier": "major"
+    },
+    {
+      "name": "Swedish",
+      "project": "svwiki",
+      "slug": "swedish",
+      "tier": "major"
+    },
+    {
+      "name": "Ukrainian",
+      "project": "ukwiki",
+      "slug": "ukrainian",
+      "tier": "major"
+    },
+    {
+      "name": "Persian",
+      "project": "fawiki",
+      "slug": "persian",
+      "tier": "major"
+    },
+    {
+      "name": "Korean",
+      "project": "kowiki",
+      "slug": "korean",
+      "tier": "major"
+    },
+    {
+      "name": "Turkish",
+      "project": "trwiki",
+      "slug": "turkish",
+      "tier": "major"
+    },
+    {
+      "name": "Hindi",
+      "project": "hiwiki",
+      "slug": "hindi",
+      "tier": "major"
+    },
+    {
+      "name": "Bengali",
+      "project": "bnwiki",
+      "slug": "bengali",
+      "tier": "major"
+    },
+    {
+      "name": "Hebrew",
+      "project": "hewiki",
+      "slug": "hebrew",
+      "tier": "major"
+    },
+    {
+      "name": "Vietnamese",
+      "project": "viwiki",
+      "slug": "vietnamese",
+      "tier": "regional"
+    },
+    {
+      "name": "Thai",
+      "project": "thwiki",
+      "slug": "thai",
+      "tier": "regional"
+    },
+    {
+      "name": "Urdu",
+      "project": "urwiki",
+      "slug": "urdu",
+      "tier": "regional"
+    },
+    {
+      "name": "Telugu",
+      "project": "tewiki",
+      "slug": "telugu",
+      "tier": "regional"
+    },
+    {
+      "name": "Marathi",
+      "project": "mrwiki",
+      "slug": "marathi",
+      "tier": "regional"
+    },
+    {
+      "name": "Swahili",
+      "project": "swwiki",
+      "slug": "swahili",
+      "tier": "regional"
+    },
+    {
+      "name": "Hausa",
+      "project": "hawiki",
+      "slug": "hausa",
+      "tier": "regional"
+    },
+    {
+      "name": "Basque",
+      "project": "euwiki",
+      "slug": "basque",
+      "tier": "regional"
+    },
+    {
+      "name": "Welsh",
+      "project": "cywiki",
+      "slug": "welsh",
+      "tier": "regional"
+    },
+    {
+      "name": "Serbian",
+      "project": "srwiki",
+      "slug": "serbian",
+      "tier": "regional"
+    },
+    {
+      "name": "Czech",
+      "project": "cswiki",
+      "slug": "czech",
+      "tier": "regional"
+    },
+    {
+      "name": "Greek",
+      "project": "elwiki",
+      "slug": "greek",
+      "tier": "regional"
+    },
+    {
+      "name": "Cebuano",
+      "project": "cebwiki",
+      "slug": "cebuano",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Waray",
+      "project": "warwiki",
+      "slug": "waray",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Scots",
+      "project": "scowiki",
+      "slug": "scots",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Esperanto",
+      "project": "eowiki",
+      "slug": "esperanto",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Toki Pona",
+      "project": "tokwiki",
+      "slug": "toki-pona",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Classical Chinese",
+      "project": "zh_classicalwiki",
+      "slug": "classical-chinese",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Navajo",
+      "project": "nvwiki",
+      "slug": "navajo",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Cherokee",
+      "project": "chrwiki",
+      "slug": "cherokee",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Inuktitut",
+      "project": "iuwiki",
+      "slug": "inuktitut",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Maori",
+      "project": "miwiki",
+      "slug": "maori",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Hawaiian",
+      "project": "hawwiki",
+      "slug": "hawaiian",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Tigre",
+      "project": "tigwiki",
+      "slug": "tigre",
+      "tier": "distinctive"
+    },
+    {
+      "name": "Latin",
+      "project": "lawiki",
+      "slug": "latin",
+      "tier": "distinctive"
+    }
+  ]
+}
