@@ -36,7 +36,7 @@ def split_sources(sources: list[Source]) -> tuple[list[Source], list[Source]] | 
     source = sources[0]
     low, high = source.low, source.high
     if low is None or high is None:
-        match = re.search(r"\.xml-p(\d+)p(\d+)\.bz2$", source.path.name)
+        match = re.search(r"(?:\.xml-p|-p)(\d+)p(\d+)(?:\.xml)?\.bz2$", source.path.name)
         if not match:
             return None
         low, high = map(int, match.groups())
