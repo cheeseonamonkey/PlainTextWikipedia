@@ -315,12 +315,13 @@ jobs:
           )
           Path("publish/dataset-metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
           PY
-          if kaggle datasets files -d "$FULL_KAGGLE_DATASET" >/dev/null 2>&1; then
-            kaggle datasets version -p publish -m "Rebuild $LANG_NAME Wikipedia $(date -u +%F)" --dir-mode skip
-          else
-            kaggle datasets create -p publish --public --dir-mode skip
-          fi
-          echo "https://www.kaggle.com/datasets/$FULL_KAGGLE_DATASET"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from scripts.kaggle_backfill import run_kaggle
+          run_kaggle(os.environ["FULL_KAGGLE_DATASET"], Path("publish"),
+                     os.environ["LANG_NAME"])
+          PY
       - name: Report publishing errors
         if: ${{ always() && steps.inspect.outputs.available == 'true' }}
         shell: bash
