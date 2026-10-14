@@ -13,7 +13,10 @@ from pathlib import Path
 
 def inspect(language: str, expected: int, directory: Path) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
-    leaf_pattern = re.compile(rf"^{re.escape(language)}_(\d{{2}})([ab]*)_of_{expected:02d}\.txt\.gz$")
+    leaf_pattern = re.compile(
+        rf"^{re.escape(language)}_(\\d{{2}})([ab]*)_of_{expected:02d}"
+        rf"(?:_part(\\d{{2}})_of_(\\d{{2}}))?\\.txt\\.gz$"
+    )
     manifest_pattern = re.compile(rf"^{re.escape(language)}_(\d{{2}})_of_{expected:02d}\.manifest\.json$")
     reports = {}
     for file in sorted(directory.glob("*.manifest.json")):
@@ -43,6 +46,12 @@ def inspect(language: str, expected: int, directory: Path) -> dict:
             file.unlink()
             continue
         root = int(m.group(1))
+        if m.group(3) is not None:
+            part, parts = int(m.group(3)), int(m.group(4))
+            if not (1 <= part <= parts <= 64):
+                print(f"::warning::Invalid repacked leaf {file.name}")
+                file.unlink()
+                continue
         report = reports.get(root)
         named = {leaf["file"] for leaf in report.get("successful_leaves", [])} if report else set()
         if file.name not in named:
