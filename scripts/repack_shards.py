@@ -51,7 +51,7 @@ def sha_and_count(file: Path) -> tuple[str, int]:
     return digest.hexdigest(), n
 
 
-def split_archive(file: Path, parts: int, staging: Path) -> list[dict]:
+def split_archive(file: Path, parts: int, staging: Path, min_bytes: int = 0) -> list[dict]:
     digest, count = sha_and_count(file)
     if parts < 2 or count < 2:
         return []
@@ -88,6 +88,12 @@ def split_archive(file: Path, parts: int, staging: Path) -> list[dict]:
             raise RuntimeError("Extra records found in split shards")
     if digest != check.hexdigest() or sum(amounts) != count:
         raise RuntimeError("Repacked Wikipedia shards FAILED lossless SHA-256 validation")
+    if min_bytes and any((staging / name).stat().st_size < min_bytes for name in filenames):
+        # A compressed-source size estimate can overpredict balanced shard
+        # sizes. Callers must retry with fewer parts, not publish tiny shards.
+        for name in filenames:
+            (staging / name).unlink(missing_ok=True)
+        return []
     for i, name in enumerate(filenames):
         result.append({"file":name,"articles":amounts[i],
                        "bytes":(staging/name).stat().st_size,
@@ -99,9 +105,9 @@ def split_archive(file: Path, parts: int, staging: Path) -> list[dict]:
     return result
 
 
-def repack(directory: Path, target: int = 16) -> dict:
-    if target < 2 or target > 64:
-        raise ValueError("Target must be in [2,64]")
+def repack(directory: Path, target: int = 16, min_bytes: int = 0) -> dict:
+    if target < 2 or target > 64 or min_bytes < 0:
+        raise ValueError("Target must be in [2,64] and minimum size nonnegative")
     reports = []
     for path in sorted(directory.glob("*.manifest.json")):
         report = json.loads(path.read_text(encoding="utf-8"))
@@ -122,12 +128,21 @@ def repack(directory: Path, target: int = 16) -> dict:
         return {"repacked":0,"files_before":current_count,
                 "files_after":current_count,"reason":"Already sharded or no valid inputs"}
 
-    # Divide the desired extra outputs among available original leaf archives,
-    # preserving source-root recovery semantics. E.g. 1 input => 16 outputs,
-    # 2 inputs => 8 each, 3 => 6/5/5.
+    # Minimum applies to compressed output, not uncompressed text. Source
+    # size supplies a conservative initial split budget; actual gzip output
+    # is measured and any undersized splits are retried with fewer parts.
+    sizes = [source.stat().st_size for _, _, _, source in eligible]
+    caps = [min(target, max(1, size // min_bytes)) if min_bytes else target
+            for size in sizes]
     requested = [1] * len(eligible)
-    for n in range(max(0,target-current_count)):
-        requested[n % len(eligible)] += 1
+    extras = max(0, target - current_count)
+    while extras:
+        allowed = [i for i in range(len(eligible)) if requested[i] < caps[i]]
+        if not allowed:
+            break
+        index = max(allowed, key=lambda i: sizes[i] / requested[i])
+        requested[index] += 1
+        extras -= 1
 
     changed = 0
     added = 0
@@ -136,7 +151,11 @@ def repack(directory: Path, target: int = 16) -> dict:
             continue
         with tempfile.TemporaryDirectory(prefix="wiki-repack-",dir=directory) as staging_name:
             staging = Path(staging_name)
-            parts = split_archive(source, desired, staging)
+            parts = []
+            for count in range(desired, 1, -1):
+                parts = split_archive(source, count, staging, min_bytes=min_bytes)
+                if parts:
+                    break
             if not parts:
                 continue
             # Success-path transaction: place finished shards first; update
@@ -167,8 +186,10 @@ def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory",type=Path,required=True)
     parser.add_argument("--target",type=int,default=16)
+    parser.add_argument("--min-mb",type=int,default=20,
+                        help="Minimum compressed MiB per split archive (0 disables minimum)")
     args=parser.parse_args()
-    print(json.dumps(repack(args.directory,args.target),indent=2))
+    print(json.dumps(repack(args.directory,args.target,args.min_mb * 1024 * 1024),indent=2))
 
 
 if __name__=="__main__":
