@@ -1,0 +1,57 @@
+name: Compact undersized published Wikipedia archives
+run-name: Merge tiny Wikipedia shards and clean verified empty files
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/compact-small-hf.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hf-wiki-tiny-compaction
+  cancel-in-progress: false
+
+jobs:
+  compact:
+    name: ${{ matrix.slug }} / merge verified small files
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        slug:
+          - maori
+          - hawaiian
+          - inuktitut
+          - atikamekw
+          - inupiaq
+          - cheyenne
+          - nahuatl
+          - guarani
+          - aymara
+          - samoan
+          - tongan
+          - tahitian
+          - toki-pona
+          - scots
+          - classical-chinese
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      SLUG: ${{ matrix.slug }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Hugging Face client
+        run: python -m pip install huggingface_hub
+      - name: Merge small same-root outputs and remove empty archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$HF_TOKEN"
+          python scripts/compact_small_hf.py \
+            "ffatty/plaintext-wikipedia-full-$SLUG" \
+            --max-total-mb 24 --min-mb 20 --apply
