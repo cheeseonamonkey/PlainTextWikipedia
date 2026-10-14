@@ -120,6 +120,15 @@ jobs:
             --language "$LANGUAGE" --shard "$SHARD" --count "$COUNT" \
             --ranges-file ranges.txt --failures-file download-failures.json \
             --max-depth 3 --max-seconds 19000 --output-dir output
+      - name: Repartition completed articles into up to 16 published archives
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          . config/datasets.env
+          python scripts/repartition_shards.py \
+            --language "$LANGUAGE" --root "$SHARD" --roots "$COUNT" \
+            --target-shards "$FULL_SHARD_COUNT" --output-dir output
       - name: Stage successful leaves and split manifest even on failure
         if: always()
         uses: actions/upload-artifact@v4
@@ -332,9 +341,15 @@ jobs:
           KAGGLE_RESULT: ${{ steps.kaggle_publish.outcome }}
         run: |
           echo "HF publication: $HF_RESULT; Kaggle publication: $KAGGLE_RESULT"
-          if [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
-            echo "::error::At least one publishing destination failed"
+          if [[ "$HF_RESULT" == success || "$KAGGLE_RESULT" == success ]]; then
+            if [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
+              echo "::warning::A publishing destination failed, but the other succeeded"
+            fi
+          elif [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
+            echo "::error::No publishing destination succeeded"
             exit 1
+          else
+            echo "::warning::No publishing destination was attempted"
           fi
       - name: Delete run shard artifacts after confirmed publication
         if: ${{ always() && (steps.hf_publish.outcome == 'success' || steps.kaggle_publish.outcome == 'success') }}
