@@ -1,0 +1,68 @@
+name: Bootstrap 36 more Wikipedia languages
+run-name: October language coverage expansion (36 editions)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap-october-coverage.yml
+
+permissions:
+  contents: read
+  actions: write
+
+# Deliberately independent of existing bootstrap workflows. Never cancel an
+# in-progress build when one language has already published valid shards.
+concurrency:
+  group: october-wikipedia-coverage
+  cancel-in-progress: false
+
+jobs:
+  october-coverage:
+    name: ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        language:
+          - idwiki
+          - mswiki
+          - fiwiki
+          - dawiki
+          - rowiki
+          - huwiki
+          - hrwiki
+          - bgwiki
+          - skwiki
+          - slwiki
+          - ltwiki
+          - lvwiki
+          - etwiki
+          - iswiki
+          - hywiki
+          - kawiki
+          - azwiki
+          - uzwiki
+          - kkwiki
+          - mnwiki
+          - afwiki
+          - sqwiki
+          - bewiki
+          - bswiki
+          - tlwiki
+          - pawiki
+          - tawiki
+          - knwiki
+          - mlwiki
+          - newiki
+          - amwiki
+          - sowiki
+          - yowiki
+          - igwiki
+          - zuwiki
+          - orwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: ${{ matrix.language }}
+    secrets: inherit
