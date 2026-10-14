@@ -53,7 +53,7 @@ def inspect(language: str, expected: int, directory: Path) -> dict:
             partition = leaf.get("partition")
             if partition:
                 m = re.fullmatch(
-                    rf"{re.escape(language)}_(\\d{{2}})_of_{published_count:02d}\\.txt\\.gz",
+                    rf"{re.escape(language)}_(\d{{2}})_of_{published_count:02d}\.txt\.gz",
                     name)
                 if (not m or int(m.group(1)) not in range(root, published_count + 1, expected)
                         or partition.get("root") != root):
