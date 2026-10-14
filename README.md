@@ -205,6 +205,8 @@ The normal full-language build targets up to **16** top-level shards (or fewer w
 
 This applies to **new publishing runs**. Older Hugging Face or Kaggle releases that were uploaded before the repacking workflow retain their old archive layout until they are republished.
 
+**Hugging Face legacy migration:** [Repack existing Hugging Face Wikipedia archives](.github/workflows/repack-existing-hf.yml) downloads the published gzip files once, SHA-256-verifies an article-exact split, uploads replacements before removing old archives, and retains original completeness/missing-range claims. It also supports manually selecting one existing `ffatty` dataset. Datasets with very large archives or unverified size metadata are skipped rather than risking a destructive upload. Kaggle archives are not changed by this separate migration.
+
 These are **disjoint subsets**, not multiple copies of the same archive. Each dataset build includes an explicit coverage manifest; if recovery is incomplete, the dataset card identifies it as **PARTIAL**.
 
 ## Run locally
