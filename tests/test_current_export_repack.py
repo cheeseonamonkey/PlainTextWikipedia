@@ -114,7 +114,7 @@ class RepackTests(unittest.TestCase):
                 filename=f"miwiki_{number:02d}_of_02.txt.gz"
                 with gzip.open(root/filename,"wb") as stream:
                     for i in range(120):
-                        record=f"Article-{number}-{i}\\nBody {number}-{i}\\n\\n".encode()
+                        record=f"Article-{number}-{i}\nBody {number}-{i}\n\n".encode()
                         expected.append(record)
                         stream.write(record)
                 manifest={
@@ -141,7 +141,7 @@ class RepackTests(unittest.TestCase):
             path=self.make_file(root,20)
             # Preserve a valid gzip header but corrupt/truncate one record.
             with gzip.open(path,"wb") as output:
-                output.write(b"Title\\nMissing terminator\\n")
+                output.write(b"Title\nMissing terminator\n")
             before=(root/"atjwiki_01_of_01.manifest.json").read_text()
             with self.assertRaises(ValueError):
                 repack(root,16)
