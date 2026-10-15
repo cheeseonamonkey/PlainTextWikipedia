@@ -1,5 +1,5 @@
 {
-  "description": "Wikipedia editions to import independently, including language-diversity and revitalization priorities. These categories do not assign an endangerment status; Wikimedia project availability and dump success are verified by CI.",
+  "description": "Independent Wikipedia plaintext imports, including 58 more active editions verified against Wikimedia's site matrix on 2026-10-15. Collections are organizational, not language-quality or endangerment judgments. CI verifies dump availability and publication separately.",
   "languages": [
     {
       "name": "Arabic",
@@ -864,6 +864,354 @@
       "project": "orwiki",
       "slug": "odia",
       "collection": "2026-october-expansion"
+    },
+    {
+      "name": "Kyrgyz",
+      "project": "kywiki",
+      "slug": "kyrgyz",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Tajik",
+      "project": "tgwiki",
+      "slug": "tajik",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Sinhala",
+      "project": "siwiki",
+      "slug": "sinhala",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Gujarati",
+      "project": "guwiki",
+      "slug": "gujarati",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Assamese",
+      "project": "aswiki",
+      "slug": "assamese",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Burmese",
+      "project": "mywiki",
+      "slug": "burmese",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Khmer",
+      "project": "kmwiki",
+      "slug": "khmer",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Lao",
+      "project": "lowiki",
+      "slug": "lao",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Javanese",
+      "project": "jvwiki",
+      "slug": "javanese",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Sundanese",
+      "project": "suwiki",
+      "slug": "sundanese",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Minangkabau",
+      "project": "minwiki",
+      "slug": "minangkabau",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Acehnese",
+      "project": "acewiki",
+      "slug": "acehnese",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Balinese",
+      "project": "banwiki",
+      "slug": "balinese",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Central Bikol",
+      "project": "bclwiki",
+      "slug": "central-bikol",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Ilocano",
+      "project": "ilowiki",
+      "slug": "ilocano",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Kapampangan",
+      "project": "pamwiki",
+      "slug": "kapampangan",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Pangasinan",
+      "project": "pagwiki",
+      "slug": "pangasinan",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Xhosa",
+      "project": "xhwiki",
+      "slug": "xhosa",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Catalan",
+      "project": "cawiki",
+      "slug": "catalan",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Galician",
+      "project": "glwiki",
+      "slug": "galician",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "West Frisian",
+      "project": "fywiki",
+      "slug": "west-frisian",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Luxembourgish",
+      "project": "lbwiki",
+      "slug": "luxembourgish",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Maltese",
+      "project": "mtwiki",
+      "slug": "maltese",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Shona",
+      "project": "snwiki",
+      "slug": "shona",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Southern Sotho",
+      "project": "stwiki",
+      "slug": "southern-sotho",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Twi",
+      "project": "twwiki",
+      "slug": "twi",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Oromo",
+      "project": "omwiki",
+      "slug": "oromo",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Tsonga",
+      "project": "tswiki",
+      "slug": "tsonga",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Tswana",
+      "project": "tnwiki",
+      "slug": "tswana",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Kinyarwanda",
+      "project": "rwwiki",
+      "slug": "kinyarwanda",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Luganda",
+      "project": "lgwiki",
+      "slug": "luganda",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Haitian Creole",
+      "project": "htwiki",
+      "slug": "haitian-creole",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Papiamento",
+      "project": "papwiki",
+      "slug": "papiamento",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Jamaican Patois",
+      "project": "jamwiki",
+      "slug": "jamaican-patois",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Fijian",
+      "project": "fjwiki",
+      "slug": "fijian",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Bislama",
+      "project": "biwiki",
+      "slug": "bislama",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Chamorro",
+      "project": "chwiki",
+      "slug": "chamorro",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Northern Sotho",
+      "project": "nsowiki",
+      "slug": "northern-sotho",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Swati",
+      "project": "sswiki",
+      "slug": "swati",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Venda",
+      "project": "vewiki",
+      "slug": "venda",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Chichewa",
+      "project": "nywiki",
+      "slug": "chichewa",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Lingala",
+      "project": "lnwiki",
+      "slug": "lingala",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Kongo",
+      "project": "kgwiki",
+      "slug": "kongo",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Kirundi",
+      "project": "rnwiki",
+      "slug": "kirundi",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Malagasy",
+      "project": "mgwiki",
+      "slug": "malagasy",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Wolof",
+      "project": "wowiki",
+      "slug": "wolof",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Fulah",
+      "project": "ffwiki",
+      "slug": "fulah",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Dagbani",
+      "project": "dagwiki",
+      "slug": "dagbani",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Dinka",
+      "project": "dinwiki",
+      "slug": "dinka",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Bambara",
+      "project": "bmwiki",
+      "slug": "bambara",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Ewe",
+      "project": "eewiki",
+      "slug": "ewe",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Fon",
+      "project": "fonwiki",
+      "slug": "fon",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Sindhi",
+      "project": "sdwiki",
+      "slug": "sindhi",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Pashto",
+      "project": "pswiki",
+      "slug": "pashto",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Kurdish",
+      "project": "kuwiki",
+      "slug": "kurdish",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Tatar",
+      "project": "ttwiki",
+      "slug": "tatar",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Bashkir",
+      "project": "bawiki",
+      "slug": "bashkir",
+      "collection": "global-expansion-2026-10-15"
+    },
+    {
+      "name": "Macedonian",
+      "project": "mkwiki",
+      "slug": "macedonian",
+      "collection": "global-expansion-2026-10-15"
     }
   ]
 }
