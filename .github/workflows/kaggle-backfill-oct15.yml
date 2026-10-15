@@ -1,0 +1,99 @@
+name: Backfill 32 verified October Wikipedias to Kaggle
+run-name: Kaggle October backfill — 32 language editions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/kaggle-backfill-oct15.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kaggle-october-backfill-32
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: ${{ matrix.slug }} / verify and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        slug:
+          - romanian
+          - hungarian
+          - croatian
+          - bulgarian
+          - slovak
+          - slovenian
+          - lithuanian
+          - latvian
+          - estonian
+          - icelandic
+          - armenian
+          - georgian
+          - azerbaijani
+          - uzbek
+          - kazakh
+          - mongolian
+          - afrikaans
+          - albanian
+          - belarusian
+          - bosnian
+          - tagalog
+          - punjabi
+          - tamil
+          - kannada
+          - malayalam
+          - nepali
+          - amharic
+          - somali
+          - yoruba
+          - igbo
+          - zulu
+          - odia
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      SLUG: ${{ matrix.slug }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Kaggle CLI
+        run: python -m pip install --upgrade kaggle
+      - name: Verify Kaggle account authentication
+        run: python scripts/kaggle_auth.py --owner ffatty
+      - name: Skip existing READY datasets that contain nonempty article files
+        id: existing
+        shell: bash
+        run: |
+          set -euo pipefail
+          dataset="ffatty/plaintext-wikipedia-full-$SLUG"
+          if kaggle datasets status "$dataset" --format json > "$RUNNER_TEMP/kaggle-status.json" 2>/dev/null \
+            && python - "$RUNNER_TEMP/kaggle-status.json" <<'PY'
+          import json,sys
+          doc=json.load(open(sys.argv[1]))
+          sys.exit(0 if doc.get("status","").lower()=="ready" else 1)
+          PY
+          then
+            if kaggle datasets files "$dataset" --csv > "$RUNNER_TEMP/kaggle-files.csv" 2>/dev/null \
+              && grep -Eq '\.txt(\.gz)?,[1-9][0-9]*,' "$RUNNER_TEMP/kaggle-files.csv"; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Already READY with nonempty article files: $dataset" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+      - name: Verify Hub archives, retain 20 MiB minimum for new splits, publish to Kaggle
+        if: ${{ steps.existing.outputs.skip != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/kaggle_backfill.py "$SLUG" \
+            --output "$RUNNER_TEMP/wiki-kaggle" --max-mb 1400
+      - name: Cleanup verified temporary corpus
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/wiki-kaggle"
