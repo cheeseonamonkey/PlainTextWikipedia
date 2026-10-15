@@ -158,6 +158,22 @@ See [the one-shot 73-edition bootstrap workflow](.github/workflows/bootstrap-lan
 
 For linguistic research, distinguish human-authored material, translations, templated/bot-generated pages and stubs. Public Wikipedia text is useful but is **not** a replacement for community-produced or community-authorized language documentation.
 
+## Global coverage expansion — 58 more editions (October 2026)
+
+The [58-language bootstrap workflow](.github/workflows/bootstrap-global-oct15.yml) adds new active Wikipedia editions verified against Wikimedia's site matrix. This is **independent** of the earlier 36-language October batch; no previously configured edition is repeated.
+
+| Coverage group | New language editions |
+|---|---|
+| South/Central Asia | Kyrgyz, Tajik, Sinhala, Gujarati, Assamese, Sindhi, Pashto, Kurdish, Tatar, Bashkir |
+| Southeast Asia | Burmese, Khmer, Lao, Javanese, Sundanese, Minangkabau, Acehnese, Balinese, Central Bikol, Ilocano, Kapampangan, Pangasinan |
+| Africa | Xhosa, Shona, Southern Sotho, Twi, Oromo, Tsonga, Tswana, Kinyarwanda, Luganda, Northern Sotho, Swati, Venda, Chichewa, Lingala, Kongo, Kirundi, Malagasy, Wolof, Fulah, Dagbani, Dinka, Bambara, Ewe, Fon |
+| Americas/Pacific | Haitian Creole, Papiamento, Jamaican Patois, Fijian, Bislama, Chamorro |
+| Europe | Catalan, Galician, West Frisian, Luxembourgish, Maltese, Macedonian |
+
+All 58 official project codes, exact dataset slugs, and display names live in [config/additional-languages.json](config/additional-languages.json). Their configured destinations follow `https://huggingface.co/datasets/ffatty/plaintext-wikipedia-full-<slug>` and `https://www.kaggle.com/datasets/ffatty/plaintext-wikipedia-full-<slug>`.
+
+**Coverage vs publication:** An active Wikimedia edition does not guarantee a completed dump or successfully published corpus. Each CI job checks available archives, preserves missing ranges and failure information, and publishes available validated data independently. Newly split output files use the **20 MiB minimum compressed size** rule (a small entire dataset may remain smaller than 20 MiB). The workflow runs at most two language editions at a time and does not cancel the earlier batch.
+
 ## Source discovery and output sharding
 
 The number of **original Wikimedia XML source files** is not the number of

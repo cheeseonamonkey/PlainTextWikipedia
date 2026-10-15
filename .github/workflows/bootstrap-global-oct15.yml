@@ -1,0 +1,90 @@
+name: Bootstrap 58 more active Wikipedia language editions
+run-name: Global multilingual Wikipedia wave — 58 editions
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/bootstrap-global-oct15.yml
+
+permissions:
+  contents: read
+  actions: write
+
+# Separate from the 36-language October bootstrap: retries on either
+# campaign cannot cancel successful or in-flight work in the other.
+concurrency:
+  group: bootstrap-global-oct15
+  cancel-in-progress: false
+
+jobs:
+  editions:
+    name: ${{ matrix.language }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        language:
+          - kywiki
+          - tgwiki
+          - siwiki
+          - guwiki
+          - aswiki
+          - mywiki
+          - kmwiki
+          - lowiki
+          - jvwiki
+          - suwiki
+          - minwiki
+          - acewiki
+          - banwiki
+          - bclwiki
+          - ilowiki
+          - pamwiki
+          - pagwiki
+          - xhwiki
+          - cawiki
+          - glwiki
+          - fywiki
+          - lbwiki
+          - mtwiki
+          - snwiki
+          - stwiki
+          - twwiki
+          - omwiki
+          - tswiki
+          - tnwiki
+          - rwwiki
+          - lgwiki
+          - htwiki
+          - papwiki
+          - jamwiki
+          - fjwiki
+          - biwiki
+          - chwiki
+          - nsowiki
+          - sswiki
+          - vewiki
+          - nywiki
+          - lnwiki
+          - kgwiki
+          - rnwiki
+          - mgwiki
+          - wowiki
+          - ffwiki
+          - dagwiki
+          - dinwiki
+          - bmwiki
+          - eewiki
+          - fonwiki
+          - sdwiki
+          - pswiki
+          - kuwiki
+          - ttwiki
+          - bawiki
+          - mkwiki
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: ${{ matrix.language }}
+    secrets: inherit
