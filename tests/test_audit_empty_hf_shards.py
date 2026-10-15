@@ -35,17 +35,20 @@ class EmptyPublishedArchiveTests(unittest.TestCase):
         ]}
         self.assertEqual(manifest_files(report), {"a.txt.gz", "b.txt.gz"})
 
-    def test_historical_projects_exclude_current_active_build_batch(self):
+    def test_all_configured_editions_including_october_and_global_are_audited(self):
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "langs.json"
             path.write_text(json.dumps({"languages": [
                 {"project": "euwiki", "slug": "basque"},
                 {"project": "idwiki", "slug": "indonesian",
                  "collection": "2026-october-expansion"},
+                {"project": "kywiki", "slug": "kyrgyz",
+                 "collection": "2026-global-oct15"},
             ]}))
             repos = datasets(path)
             self.assertIn("ffatty/plaintext-wikipedia-full-basque", repos)
-            self.assertNotIn("ffatty/plaintext-wikipedia-full-indonesian", repos)
+            self.assertIn("ffatty/plaintext-wikipedia-full-indonesian", repos)
+            self.assertIn("ffatty/plaintext-wikipedia-full-kyrgyz", repos)
 
 
 if __name__ == "__main__":

@@ -2,10 +2,9 @@ name: Audit and clean verified empty Hugging Face Wiki shards
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/audit-empty-hf-shards.yml
+  workflow_run:
+    workflows: ["Bootstrap 58 more active Wikipedia language editions"]
+    types: [completed]
 
 permissions:
   contents: read
@@ -24,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Hub client
         run: python -m pip install huggingface_hub
-      - name: Validate historical archives and delete only confirmed empty unreferenced files
+      - name: Audit all configured Wikipedias; only delete verified empty unreferenced files
         shell: bash
         run: |
           set -euo pipefail

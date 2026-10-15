@@ -24,8 +24,10 @@ ORIGINAL = (
 
 def datasets(config: Path) -> list[str]:
     entries = json.loads(config.read_text(encoding="utf-8"))["languages"]
-    slugs = [x["slug"] for x in entries
-             if x.get("collection") != "2026-october-expansion"]
+    # Previously excluded the October batch while it was not published.
+    # Audits now cover every configured edition; unpublished projects are
+    # safely reported as unavailable, never inferred to be empty.
+    slugs = [x["slug"] for x in entries]
     slugs.extend(ORIGINAL)
     return sorted({f"ffatty/plaintext-wikipedia-full-{slug}" for slug in slugs}
                   - {"ffatty/plaintext-wikipedia-full-simpleenglish"})
