@@ -43,6 +43,18 @@ class KaggleAuthTests(unittest.TestCase):
             self.assertEqual(config,{"username":"ffatty","key":"legacy-key"})
             self.assertFalse((root/".kaggle/access_token").exists())
 
+    def test_auth_uses_protected_dataset_status_not_unauthenticated_listing(self):
+        class Result:
+            returncode = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("scripts.kaggle_auth.subprocess.run", return_value=Result()) as run:
+                self.assertEqual(verify_and_configure("test-token", "ffatty",
+                                    home=Path(tmp)), "access-token")
+            cmd = run.call_args.args[0]
+            self.assertEqual(cmd[3:5], ["datasets", "status"])
+            self.assertIn("ffatty/plain-text-wikipedia-simpleenglish", cmd)
+            self.assertNotIn("list", cmd)
+
     def test_invalid_auth_does_not_persist_token(self):
         class Result:
             returncode=1

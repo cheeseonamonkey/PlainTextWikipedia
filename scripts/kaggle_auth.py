@@ -80,10 +80,15 @@ def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> s
                  if key not in ("KAGGLE_API_TOKEN", "KAGGLE_USERNAME",
                                 "KAGGLE_KEY", "KAGGLE_TOKEN", "KAGGLE_CONFIG_DIR")}
         clean.update(auth)
-        # This explicitly requires account-authenticated listings, not a public
-        # dataset lookup that could succeed without any credentials.
+        # Kaggle's 'datasets list --mine' INCORRECTLY exits 0 for invalid
+        # API keys (verified with a bogus token). Probe a protected endpoint
+        # for a known dataset in the configured account instead.
+        # The caller can override it when targeting another Kaggle account.
+        probe = os.environ.get("KAGGLE_AUTH_PROBE_DATASET",
+                               f"{owner}/plain-text-wikipedia-simpleenglish")
         result = subprocess.run(
-            [sys.executable, "-m", "kaggle", "datasets", "list", "--mine"],
+            [sys.executable, "-m", "kaggle", "datasets", "status", probe,
+             "--format", "json"],
             env=clean, capture_output=True, text=True, timeout=90, check=False,
         )
         if result.returncode != 0:
@@ -103,9 +108,12 @@ def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> s
         persist_verified_credentials_to_actions(auth, os.environ.get("GITHUB_ENV"))
         print(f"Kaggle authenticated using {mode}", flush=True)
         return mode
-    raise RuntimeError("No Kaggle credential mode authenticated. Rotate/update the "
-                       "KAGGLE_TOKEN GitHub Actions secret at Kaggle Settings > API; "
-                       "provide either a modern API token or legacy kaggle.json.")
+    raise RuntimeError("Neither Kaggle credential mode could access the account's "
+                       "protected dataset status. Update the KAGGLE_TOKEN GitHub "
+                       "Actions secret using valid Kaggle API credentials at "
+                       "Kaggle Settings > API; provide a modern API token or "
+                       "legacy kaggle.json. Do not rely on 'datasets list --mine' "
+                       "as a credential test.")
 
 
 def main() -> None:
