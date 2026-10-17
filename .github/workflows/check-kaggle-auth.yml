@@ -30,6 +30,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The credential selector has already verified and propagated the
+          # chosen mode. The raw GitHub secret is NOT a Kaggle CLI variable.
+          unset KAGGLE_TOKEN
           kaggle datasets list --mine --page-size 2 >/dev/null
           kaggle datasets status ffatty/plaintext-wikipedia-full-hindi --format json >/dev/null
           echo "Kaggle credentials usable in later CI steps"
