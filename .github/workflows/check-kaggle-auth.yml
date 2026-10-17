@@ -33,6 +33,19 @@ jobs:
           # The credential selector has already verified and propagated the
           # chosen mode. The raw GitHub secret is NOT a Kaggle CLI variable.
           unset KAGGLE_TOKEN
-          kaggle datasets list --mine --page-size 2 >/dev/null
-          kaggle datasets status ffatty/plaintext-wikipedia-full-hindi --format json >/dev/null
+          # Report exit codes without printing API keys or dataset payloads.
+          set +e
+          python -m kaggle datasets list --mine >/dev/null 2>/dev/null
+          mod_list=$?
+          python -m kaggle datasets list --mine --page-size 2 >/dev/null 2>/dev/null
+          mod_paged=$?
+          kaggle datasets list --mine >/dev/null 2>/dev/null
+          cli_list=$?
+          kaggle datasets status ffatty/plaintext-wikipedia-full-hindi --format json >/dev/null 2>/dev/null
+          cli_status=$?
+          set -e
+          echo "Kaggle read-only diagnostics: module_list=$mod_list, module_page=$mod_paged, cli_list=$cli_list, cli_status=$cli_status"
+          test "$mod_list" -eq 0
+          test "$cli_list" -eq 0
+          test "$cli_status" -eq 0
           echo "Kaggle credentials usable in later CI steps"
