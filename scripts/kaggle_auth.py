@@ -44,6 +44,28 @@ def candidates(secret: str, owner: str) -> list[tuple[str, dict[str, str]]]:
     ]
 
 
+def persist_verified_credentials_to_actions(auth: dict[str, str],
+                                            env_file: str | None) -> None:
+    """Make credentials verified in this process available to later CI steps.
+
+    GitHub Actions starts every shell step as a NEW process. Authenticating
+    with environment variables in a child process is not persistent; nor is
+    writing kaggle.json reliable when the subsequent CLI prioritizes env vars.
+    GITHUB_ENV is GitHub's secure, intended cross-step environment channel.
+    Nothing secret is written to logs, outputs, commits, or job summaries.
+    """
+    if not env_file:
+        return
+    allowed = {"KAGGLE_API_TOKEN", "KAGGLE_USERNAME", "KAGGLE_KEY"}
+    if not auth or set(auth) - allowed:
+        raise ValueError("Unexpected Kaggle authentication environment keys")
+    with open(env_file, "a", encoding="utf-8") as stream:
+        for key, value in auth.items():
+            if not value or "\n" in value or "\r" in value:
+                raise ValueError("Invalid Kaggle credential for GitHub Actions environment")
+            stream.write(f"{key}={value}\n")
+
+
 def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> str:
     home = home or Path.home()
     folder = home / ".kaggle"
@@ -76,6 +98,9 @@ def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> s
                                           "key": auth["KAGGLE_KEY"]}),
                               encoding="utf-8")
             config.chmod(0o600)
+        # The authenticated subprocess had explicit environment credentials;
+        # preserve that exact successful mode for all FOLLOWING Actions steps.
+        persist_verified_credentials_to_actions(auth, os.environ.get("GITHUB_ENV"))
         print(f"Kaggle authenticated using {mode}", flush=True)
         return mode
     raise RuntimeError("No Kaggle credential mode authenticated. Rotate/update the "
