@@ -21,10 +21,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Kaggle CLI
         run: python -m pip install --upgrade kaggle
-      - name: Verify authenticated account access without exposing secrets
+      - name: Verify Kaggle credential mode without exposing secrets
         shell: bash
         run: |
           set -euo pipefail
           python scripts/kaggle_auth.py --owner ffatty
+      - name: Verify Kaggle credentials persist into a NEW shell step
+        shell: bash
+        run: |
+          set -euo pipefail
           kaggle datasets list --mine --page-size 2 >/dev/null
-          echo "Kaggle credential preflight passed"
+          kaggle datasets status ffatty/plaintext-wikipedia-full-hindi --format json >/dev/null
+          echo "Kaggle credentials usable in later CI steps"
