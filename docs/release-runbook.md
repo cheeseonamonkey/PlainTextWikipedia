@@ -40,7 +40,11 @@ the publisher credentials **once**, then calls the same reusable per-language
 workflow available from **Publish one Wikipedia dataset**. GitHub queues the
 remaining matrix jobs; no separate workflow-dispatch events or artifact handoffs.
 Use `parallelism` (1–12) to tune concurrency, or `languages` (comma-separated
-existing dataset IDs or slugs) to retry only failed editions.
+**Wikimedia codes**, project IDs, dataset slugs or repo IDs) to retry only failed
+editions. For example, `simple,en` selects Simple English and Full English;
+`shwiki` selects Serbo-Croatian. Codes are resolved against existing published
+repos using `config/additional-languages.json` and `config/datasets.env`; unknown
+or ambiguous selections fail before any release jobs start.
 
 The cheap Simple English edition runs first as a smoke check, followed by the
 largest likely editions to avoid a long trailing job. Actual runtime depends
@@ -68,7 +72,7 @@ discarded to fake a successful Kaggle version.
 
 **Reruns:** Source/artifact SHA256 manifests allow successful HF shards,
 unchanged Kaggle datasets, and unchanged Zenodo records to skip redundant work.
-Use `languages` to retry only failures (e.g. `english,serbo-croatian`).
+Use `languages` to retry only failures (e.g. `en,sh`).
 Only temporary network errors are retried with exponential backoff and jitter;
 authentication and bad-source errors fail immediately.
 
