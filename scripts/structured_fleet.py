@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
 try:
     from scripts.structured_export import export
@@ -174,23 +174,25 @@ def build(repo: str) -> None:
                 if result["source_sha256"] != digest:
                     raise ValueError(f"Source LFS SHA256 mismatch: {path}")
 
-                # Publish data first, manifests last; no source files are modified.
-                for kind, artifact in result["artifacts"].items():
-                    location = f"structured/{artifact['path']}"
-                    file = working / "output" / artifact["path"]
-                    retry(f"upload {location}", lambda file=file, location=location:
-                          api.upload_file(repo_id=repo, repo_type="dataset",
-                                          path_or_fileobj=str(file),
-                                          path_in_repo=location,
-                                          commit_message=f"Structured {kind}: {name}"))
-                for kind in result["artifacts"]:
-                    filename = f"{name}.{kind}.json"
-                    retry(f"publish manifest {filename}", lambda filename=filename:
-                          api.upload_file(
-                              repo_id=repo, repo_type="dataset",
-                              path_or_fileobj=str(working / "output" / "manifests" / filename),
-                              path_in_repo=f"structured/manifests/{filename}",
-                              commit_message=f"Verify {kind} source {name}"))
+                # One atomic HF commit per shard: no half-published Parquet
+                # without the matching checksum manifest, and one fewer API commit.
+                artifact = result["artifacts"]["parquet"]
+                parquet_file = working / "output" / artifact["path"]
+                manifest_file = working / "output" / "manifests" / f"{name}.parquet.json"
+                operations = [
+                    CommitOperationAdd(
+                        path_in_repo=f"structured/{artifact['path']}",
+                        path_or_fileobj=str(parquet_file),
+                    ),
+                    CommitOperationAdd(
+                        path_in_repo=f"structured/manifests/{name}.parquet.json",
+                        path_or_fileobj=str(manifest_file),
+                    ),
+                ]
+                retry(f"commit Parquet + provenance {name}", lambda:
+                      api.create_commit(repo_id=repo, repo_type="dataset",
+                                        operations=operations,
+                                        commit_message=f"Verified Parquet: {name}"))
                 updated += 1
                 print(f"UPDATED {repo}/{name}: {result['articles']} articles, "
                       f"Parquet", flush=True)
