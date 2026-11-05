@@ -125,6 +125,33 @@ def fetch_verified(api: HfApi, repo: str, asset: Asset, directory: Path) -> Path
     return path
 
 
+def provenance_fingerprint(metadata: dict) -> str:
+    """Version fingerprint from the complete source and Parquet manifest."""
+    encoded = json.dumps(metadata, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def list_matching_depositions(requests, url: str, headers: dict, title: str) -> list[dict]:
+    """Search owned deposits, not public records; paginate to avoid duplicate DOIs."""
+    matches = []
+    for page in range(1, 102):
+        response = requests.get(url, headers=headers,
+                                params={"q": "Plaintext Wikipedia", "size": 100,
+                                        "page": page, "all_versions": "false"},
+                                timeout=30)
+        response.raise_for_status()
+        batch = response.json()
+        if not isinstance(batch, list):
+            raise RuntimeError("Unexpected Zenodo deposition listing")
+        matches.extend(item for item in batch
+                       if item.get("metadata", {}).get("title", item.get("title")) == title)
+        if len(batch) < 100:
+            break
+    else:
+        raise RuntimeError("Zenodo deposition search exceeded pagination limit")
+    return matches
+
+
 def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
                    record_id: int | None):
     import requests
@@ -135,9 +162,11 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     headers = {"Authorization": f"Bearer {token}"}
     url = "https://zenodo.org/api/deposit/depositions"
     title = f"Plaintext Wikipedia ({metadata['language']}) — Parquet edition"
+    fingerprint = provenance_fingerprint(metadata)
     payload = {
         "metadata": {
             "title": title,
+            "notes": f"wikidata-parquet-manifest-sha256:{fingerprint}",
             "upload_type": "dataset",
             "description": (
                 "<p>Compressed Parquet article text, with source SHA256 provenance, "
@@ -152,34 +181,45 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
             "keywords": ["wikipedia", "corpus", "parquet", "multilingual", "plain text"],
         }
     }
-    if record_id:
-        original = requests.get(f"{url}/{record_id}", headers=headers, timeout=30)
-        original.raise_for_status()
-        previous = original.json()
-        # A new-version draft inherits old files. Refuse silent carry-over of
-        # obsolete Parquet shards; it would misrepresent the published corpus.
-        old_names = {item["filename"] for item in previous.get("files", [])}
-        expected_names = {Path(asset.path).name for asset in assets} | {"provenance.json"}
-        if old_names != expected_names:
-            raise ValueError("Existing Zenodo file set differs from this release; "
-                             "manual review required before creating a new version")
+    if record_id is None:
+        matches = list_matching_depositions(requests, url, headers, title)
+        if len(matches) > 1:
+            raise RuntimeError("Multiple Zenodo records already match this language; "
+                               "supply --zenodo-id to select the intended record")
+        if matches:
+            prior = matches[0]
+            record_id = int(prior["id"])
+        else:
+            prior = None
+    else:
+        response = requests.get(f"{url}/{record_id}", headers=headers, timeout=30)
+        response.raise_for_status()
+        prior = response.json()
+        if prior.get("metadata", {}).get("title") != title:
+            raise ValueError("Zenodo record ID belongs to another Wikipedia edition")
+
+    if prior and prior.get("submitted") and prior.get("metadata", {}).get("notes") == (
+            f"wikidata-parquet-manifest-sha256:{fingerprint}"):
+        print(f"SKIP Zenodo: published edition is current ({record_id})", flush=True)
+        return
+
+    if prior and prior.get("submitted"):
         response = requests.post(f"{url}/{record_id}/actions/newversion",
                                  headers=headers, timeout=30)
         response.raise_for_status()
         draft_url = response.json()["links"]["latest_draft"]
         if not draft_url.startswith(url + "/"):
             raise RuntimeError("Unexpected Zenodo draft URL")
-        response = requests.get(draft_url, headers=headers, timeout=30)
+        response = requests.put(draft_url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         draft = response.json()
-        updated = requests.put(draft_url, json=payload, headers=headers, timeout=30)
-        updated.raise_for_status()
-        draft = updated.json()
-    else:
-        response = requests.get(url, params={"size": 100}, headers=headers, timeout=30)
+    elif prior:
+        # Resume an unpublished draft from a previous interrupted workflow.
+        response = requests.put(f"{url}/{record_id}", json=payload,
+                                headers=headers, timeout=30)
         response.raise_for_status()
-        if any(item.get("title") == title for item in response.json()):
-            raise ValueError("Existing Zenodo record with this title: supply --zenodo-id to version it")
+        draft = response.json()
+    else:
         response = requests.post(url, json=payload, headers=headers, timeout=30)
         response.raise_for_status()
         draft = response.json()

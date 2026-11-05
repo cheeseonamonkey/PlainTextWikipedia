@@ -1,22 +1,27 @@
-name: Rebuild structured editions across all published Wikipedias
+name: Publish Wikipedia editions to Hugging Face, Kaggle and Zenodo
 
 on:
   workflow_dispatch:
     inputs:
       format:
-        description: Formats for every published Wikipedia dataset
-        required: true
+        description: HF/Kaggle structured editions; must include Parquet when Zenodo is enabled
         type: choice
+        required: true
         default: both
-        options: [parquet, sqlite, both]
+        options: [both, parquet, sqlite]
       mirror_kaggle:
-        description: Update existing Kaggle datasets when safe
+        description: Publish new versions of existing Kaggle datasets
+        type: boolean
+        default: true
+      publish_zenodo:
+        description: Publish or version Zenodo research records (Parquet only)
         type: boolean
         default: true
       kaggle_stage_mb:
-        description: Max compressed data (MiB) per Kaggle runner
+        description: Compressed staging limit per Kaggle runner (MiB); oversized releases fail visibly
         type: number
-        default: 2500
+        default: 5000
+
 permissions:
   contents: read
 
@@ -41,37 +46,60 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python scripts/structured_fleet.py plan
 
-  kaggle-auth:
-    name: Preflight Kaggle CLI once, before any Kaggle download
+  credentials:
+    name: Check publisher credentials before any large downloads
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    outputs:
-      enabled: ${{ steps.check.outputs.enabled }}
+    timeout-minutes: 12
     env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-      WANT_KAGGLE: ${{ github.event_name == 'push' || inputs.mirror_kaggle }}
+      ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+      WANT_KAGGLE: ${{ inputs.mirror_kaggle }}
+      WANT_ZENODO: ${{ inputs.publish_zenodo }}
+      EXPORT_FORMAT: ${{ inputs.format }}
     steps:
       - uses: actions/checkout@v4
-      - run: python -m pip install kaggle six
-      - id: check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install huggingface_hub kaggle six requests
+      - name: Validate destination credentials (read-only)
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$WANT_KAGGLE" != "true" || -z "$KAGGLE_TOKEN" ]]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Kaggle mirror disabled or credential missing"
-          elif python scripts/kaggle_auth.py --owner ffatty; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-            echo "Kaggle CLI authenticated; mirrors will be permitted."
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Kaggle CLI auth rejected. HF exports continue. Update KAGGLE_TOKEN."
+          python - <<'PY'
+          import os
+          import requests
+          from huggingface_hub import HfApi
+          e = os.environ
+          if not e.get("HF_TOKEN"):
+              raise SystemExit("::error::HF_TOKEN missing")
+          HfApi(token=e["HF_TOKEN"]).whoami()
+          if e["WANT_ZENODO"] == "true":
+              if e["EXPORT_FORMAT"] == "sqlite":
+                  raise SystemExit("::error::Zenodo requires a Parquet export")
+              if not e.get("ZENODO_TOKEN"):
+                  raise SystemExit("::error::ZENODO_TOKEN missing")
+              response = requests.get(
+                  "https://zenodo.org/api/deposit/depositions",
+                  params={"size": 1},
+                  headers={"Authorization": "Bearer " + e["ZENODO_TOKEN"]},
+                  timeout=30,
+              )
+              response.raise_for_status()
+              if not isinstance(response.json(), list):
+                  raise RuntimeError("Unexpected Zenodo account response")
+          PY
+          if [[ "$WANT_KAGGLE" == true ]]; then
+            [[ -n "$KAGGLE_TOKEN" ]] || { echo "::error::KAGGLE_TOKEN missing"; exit 1; }
+            python scripts/kaggle_auth.py --owner ffatty
           fi
+          echo "All enabled destinations passed read-only authentication checks"
 
   export:
-    name: HF ${{ matrix.repo }}
-    needs: [plan, kaggle-auth]
-    if: needs.plan.result == 'success'
+    name: Publish three formats/destinations — ${{ matrix.repo }}
+    needs: [plan, credentials]
+    if: ${{ needs.plan.result == 'success' && needs.credentials.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -80,34 +108,57 @@ jobs:
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
       REPO: ${{ matrix.repo }}
-      FORMAT: ${{ github.event_name == 'push' && 'both' || inputs.format }}
+      FORMAT: ${{ inputs.format }}
+      WANT_KAGGLE: ${{ inputs.mirror_kaggle }}
+      WANT_ZENODO: ${{ inputs.publish_zenodo }}
+      MAX_MB: ${{ inputs.kaggle_stage_mb }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install huggingface_hub pyarrow zstandard
-      - name: Reuse current structured files; convert only missing or stale archives
+      - run: python -m pip install huggingface_hub pyarrow zstandard requests kaggle six
+      - name: Build or reuse current formats; publish to Hugging Face
+        id: hf
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/structured_fleet.py build \
-            --repo "$REPO" --format "$FORMAT" --fts-max-mb 100
+          python scripts/structured_fleet.py build --repo "$REPO" --format "$FORMAT" --fts-max-mb 100
 
-      - name: Set up Kaggle CLI for existing dataset versions
-        if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
-        run: python -m pip install kaggle six
-      - name: Authenticate Kaggle CLI in this job
-        if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
-        env:
-          KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-        run: python scripts/kaggle_auth.py --owner ffatty
-      - name: Safely update existing Kaggle version (when within staging budget)
-        if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
-        env:
-          MAX_MB: ${{ github.event_name == 'push' && '2500' || inputs.kaggle_stage_mb }}
+      - name: Publish new version to existing Kaggle dataset (preserve original files)
+        if: ${{ steps.hf.outcome == 'success' && inputs.mirror_kaggle }}
+        id: kaggle
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/structured_kaggle.py --repo "$REPO" --max-mb "$MAX_MB"
+          python scripts/kaggle_auth.py --owner ffatty
+          python scripts/structured_kaggle.py --repo "$REPO" --max-mb "$MAX_MB" --require-publish
+
+      - name: Publish or version Zenodo DOI (Parquet only)
+        if: ${{ steps.hf.outcome == 'success' && inputs.publish_zenodo }}
+        id: zenodo
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/release_parquet.py --repo "$REPO" --publish
+
+      - name: Require successful publication at each enabled destination
+        if: always()
+        shell: bash
+        env:
+          HF_OUTCOME: ${{ steps.hf.outcome }}
+          KAGGLE_OUTCOME: ${{ steps.kaggle.outcome }}
+          ZENODO_OUTCOME: ${{ steps.zenodo.outcome }}
+        run: |
+          set -euo pipefail
+          echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
+          echo "Hugging Face: $HF_OUTCOME; Kaggle: $KAGGLE_OUTCOME; Zenodo: $ZENODO_OUTCOME" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$HF_OUTCOME" == success ]] || exit 1
+          if [[ "$WANT_KAGGLE" == true && "$KAGGLE_OUTCOME" != success ]]; then exit 1; fi
+          if [[ "$WANT_ZENODO" == true && "$ZENODO_OUTCOME" != success ]]; then exit 1; fi

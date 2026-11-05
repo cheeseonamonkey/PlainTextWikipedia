@@ -9,9 +9,9 @@ on:
         type: string
         default: ffatty/plain-text-wikipedia-simpleenglish
       publish:
-        description: Irreversibly publish a Zenodo DOI (false means inspect only)
+        description: Publish or version a Zenodo Parquet DOI (disable for validation only)
         type: boolean
-        default: false
+        default: true
       existing_record_id:
         description: Existing Zenodo deposition ID to create a NEW version; otherwise blank
         required: false

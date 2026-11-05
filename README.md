@@ -7,7 +7,7 @@ Convert official Wikimedia dumps into independently compressed, UTF-8 plaintext 
 
 Existing published plaintext shards can also be exported as **Zstandard Parquet** (ML/analytics) or **compressed SQLite** (offline SQL, optional FTS5 search). The new format files live alongside the original archives in the **same dataset per language**; no XML reconversion is required. The conversion is additive and preserves source SHA-256 provenance. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
 
-**Release controls:** [3-destination runbook](docs/release-runbook.md) — offline regression tests, read-only credential checks, resumable multilingual exports, safe Kaggle versioning, and manual-only Zenodo DOI publication. No full-fleet release starts automatically on merge.
+**Release controls:** [3-destination runbook](docs/release-runbook.md) — offline regression tests, read-only credential checks, resumable multilingual exports, safe Kaggle versioning, and manual-only Zenodo DOI publication. When you manually start the full-fleet release, all three destinations publish by default; you can explicitly disable Kaggle or Zenodo. No full-fleet release starts automatically on merge.
 
 ## Published datasets and destinations
 
