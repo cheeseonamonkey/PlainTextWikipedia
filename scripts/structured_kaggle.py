@@ -10,7 +10,9 @@ Run after Kaggle authentication and successful/partial HF structured exports.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -51,6 +53,39 @@ def language_name(repo: str) -> str:
     entries = json.loads(catalog.read_text(encoding="utf-8"))["languages"]
     return next((item["name"] for item in entries if item["slug"] == slug),
                 slug.replace("-", " ").title())
+
+
+def remote_is_current(dataset: str, provenance: dict, planned: list[tuple],
+                      directory: Path) -> bool:
+    """Check a tiny published manifest before downloading the entire Kaggle dataset.
+
+    A successful match requires every planned filename in the remote inventory
+    and zero obsolete SQLite files. Unknown CLI formats fall back to the full
+    verified staging path; never infer freshness from a missing file.
+    """
+    listing = run("files", dataset, "--csv", "--page-size", "100", check=False)
+    if listing.returncode:
+        return False
+    reader = csv.DictReader(io.StringIO(listing.stdout))
+    if not reader.fieldnames or "name" not in reader.fieldnames:
+        return False
+    names = {row.get("name") for row in reader if row.get("name")}
+    wanted = {Path(location).name for location, _, _ in planned}
+    wanted.add("structured-manifest.json")
+    if not wanted.issubset(names):
+        return False
+    if any(name.endswith((".sqlite", ".sqlite.zst", ".sqlite.json"))
+           for name in names):
+        return False
+    directory.mkdir(parents=True, exist_ok=True)
+    response = run("download", "-d", dataset, "-f", "structured-manifest.json",
+                   "-p", str(directory), "--unzip", check=False)
+    if response.returncode:
+        return False
+    try:
+        return json.loads((directory / "structured-manifest.json").read_text()) == provenance
+    except (OSError, ValueError):
+        return False
 
 
 def mirror(repo: str, max_mb: int, require_publish: bool = False):
@@ -100,18 +135,6 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
     if len(planned) + 1 > 49:
         skip(f"{repo}: {len(planned)} input files exceed safe Kaggle file budget")
         return
-    total = sum(int(files[name].size) for name, _, _ in planned)
-    # Preflight runner capacity before downloading the complete old corpus;
-    # account for the HF cache, assembled stage, and transient Kaggle upload.
-    available = shutil.disk_usage(tempfile.gettempdir()).free
-    if total * 2 + 1_000_000_000 > available:
-        skip(f"{repo}: need ~{(total * 2 + 1_000_000_000)/1e9:.1f} GB "
-             f"temporary disk; only {available/1e9:.1f} GB free on runner")
-        return
-    if total > max_mb * 1024 * 1024:
-        skip(f"{repo}: {total / 1048576:.0f} MiB exceeds {max_mb} MiB CI staging budget")
-        return
-
     # Do not create new dataset IDs here: only version existing datasets.
     existing = run("status", dataset, "--format", "json", check=False)
     if existing.returncode:
@@ -124,6 +147,26 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
     if str(status.get("status", "")).lower() != "ready":
         skip(f"{dataset}: not READY; refusing to replace pending data")
         return
+    provenance = {"version": 1, "source": f"https://huggingface.co/datasets/{repo}",
+                  "archives": manifests}
+    # For unchanged datasets, download only the ~KB provenance document.
+    # This avoids re-downloading multiple gigabytes on every fleet rerun.
+    with tempfile.TemporaryDirectory(prefix="wiki-kaggle-probe-") as probe:
+        if remote_is_current(dataset, provenance, planned, Path(probe)):
+            print(f"SKIP {dataset}: verified original + Parquet already current")
+            return
+    total = sum(int(files[name].size) for name, _, _ in planned)
+    # Preflight runner capacity before downloading the complete old corpus;
+    # account for the HF cache, assembled stage, and transient Kaggle upload.
+    available = shutil.disk_usage(tempfile.gettempdir()).free
+    if total * 2 + 1_000_000_000 > available:
+        skip(f"{repo}: need ~{(total * 2 + 1_000_000_000)/1e9:.1f} GB "
+             f"temporary disk; only {available/1e9:.1f} GB free on runner")
+        return
+    if total > max_mb * 1024 * 1024:
+        skip(f"{repo}: {total / 1048576:.0f} MiB exceeds {max_mb} MiB CI staging budget")
+        return
+
     with tempfile.TemporaryDirectory(prefix="wiki-kaggle-") as tmp:
         root = Path(tmp)
         stage = root / "stage"
@@ -147,8 +190,6 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
                   flush=True)
 
         # A repeated CI run should not re-upload an identical Kaggle version.
-        provenance = {"version": 1, "source": f"https://huggingface.co/datasets/{repo}",
-                      "archives": manifests}
         old_provenance = stage / "structured-manifest.json"
         if old_provenance.exists():
             try:
