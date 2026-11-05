@@ -165,8 +165,7 @@ def build(repo: str) -> None:
     api = HfApi(token=token)
     sources, remote = retry("list existing HF files", lambda: source_files(api, repo))
     if not sources:
-        print(f"::warning::No source text archives in {repo}; skipping", flush=True)
-        return
+        raise RuntimeError(f"No source text archives in {repo}; nothing can be published")
     failures = []
     updated = skipped = 0
     for path, info in sorted(sources.items()):
