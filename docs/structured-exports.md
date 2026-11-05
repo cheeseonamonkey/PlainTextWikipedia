@@ -35,7 +35,13 @@ before claiming full edition coverage.
   and checks filenames. When unchanged, nothing is staged or uploaded.
   Changed editions download the prior complete file set first to avoid
   silently dropping original data. Oversized editions fail explicitly.
-- Zenodo receives **Parquet only**, plus a provenance manifest.
+- Zenodo receives **Parquet only**, plus a provenance manifest. Kaggle and
+  Zenodo reuse the same on-runner Hugging Face file cache to avoid fetching
+  identical assets twice. Newly generated Parquet manifests also carry an MD5
+  alongside SHA256, allowing Zenodo to reuse already-uploaded draft files
+  **without even downloading them again** when size/MD5 match.
+- Parquet batches are capped by both row count and 32 MiB of decoded article
+  bytes, reducing memory spikes from unusually large articles.
 
 No workflow creates new SQLite databases or FTS5 indexes. Older SQLite assets remain available on Hugging Face where previously published;
 new Kaggle versions omit legacy SQLite while previous Kaggle versions
