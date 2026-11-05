@@ -278,6 +278,33 @@ class TestFleetPlanningAndKaggleProbe(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unknown/unpublished"):
             select_repos(repos, "not-an-edition")
 
+    def test_wikimedia_codes_and_project_ids_resolve_exact_published_repos(self):
+        from scripts.structured_fleet import SIMPLE, select_repos
+
+        english = "ffatty/plaintext-wikipedia-full-english"
+        norwegian = "ffatty/plaintext-wikipedia-full-norwegian"
+        serbo_croatian = "ffatty/plaintext-wikipedia-full-serbo-croatian"
+        old_english = "ffatty/plaintext-wikipedia-full-old-english"
+        repos = [english, SIMPLE, norwegian, serbo_croatian, old_english]
+        self.assertEqual(select_repos(repos, "simple,en"), [SIMPLE, english])
+        self.assertEqual(select_repos(repos, "simplewiki,enwiki"), [SIMPLE, english])
+        self.assertEqual(select_repos(repos, "en,english,enwiki"), [english])
+        self.assertEqual(select_repos(repos, "no,nob"), [norwegian])
+        self.assertEqual(select_repos(repos, "shwiki,ang"), [serbo_croatian, old_english])
+        self.assertEqual(select_repos(repos, f"{SIMPLE},{english}"), [SIMPLE, english])
+        with self.assertRaisesRegex(ValueError, "Unknown/unpublished"):
+            select_repos([english], "sh")
+        with self.assertRaisesRegex(ValueError, "No Wikipedia languages selected"):
+            select_repos(repos, " , , ")
+
+    def test_ambiguous_project_codes_fail_closed(self):
+        from scripts.structured_fleet import select_repos
+
+        repo = "ffatty/plaintext-wikipedia-full-english"
+        other = "ffatty/plaintext-wikipedia-full-en"
+        with self.assertRaisesRegex(ValueError, "Ambiguous Wikipedia language: en"):
+            select_repos([repo, other], "en")
+
     def test_kaggle_remote_fast_path_downloads_manifest_only(self):
         from scripts.structured_kaggle import remote_is_current
 
