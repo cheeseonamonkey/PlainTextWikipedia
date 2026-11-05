@@ -188,6 +188,8 @@ class TestParquetOnlyPublishing(unittest.TestCase):
             def runner(*args, check=True):
                 if args[0] == "status":
                     return SimpleNamespace(returncode=0, stdout='{"status":"ready"}')
+                if args[0] == "files":
+                    return SimpleNamespace(returncode=1, stdout="")
                 if args[0] == "download":
                     stage = Path(args[args.index("-p") + 1])
                     (stage / raw_name).write_bytes(raw.read_bytes())
@@ -231,17 +233,20 @@ class TestParquetOnlyPublishing(unittest.TestCase):
                                      lfs={"sha256": digest}, size=raw.stat().st_size)
             uploaded = []
 
-            def upload_file(*, path_in_repo, path_or_fileobj, **kwargs):
-                file = Path(path_or_fileobj)
-                self.assertTrue(file.is_file())
-                uploaded.append(path_in_repo)
+            def create_commit(*, operations, **kwargs):
+                self.assertEqual(len(operations), 2)
+                for operation in operations:
+                    self.assertTrue(Path(operation.path_or_fileobj).is_file())
+                    uploaded.append(operation.path_in_repo)
 
             with (patch.dict(os.environ, {"HF_TOKEN": "test-token"}),
                   patch("scripts.structured_fleet.HfApi") as api,
                   patch("scripts.structured_fleet.hf_hub_download", return_value=str(raw))):
                 api.return_value.list_repo_tree.return_value = [source]
-                api.return_value.upload_file.side_effect = upload_file
+                api.return_value.create_commit.side_effect = create_commit
                 build(repo)
+                api.return_value.create_commit.assert_called_once()
+                api.return_value.upload_file.assert_not_called()
             self.assertEqual(sorted(uploaded), [
                 f"structured/manifests/{name}.parquet.json",
                 f"structured/parquet/{name}.parquet",
@@ -273,10 +278,17 @@ class TestCIContracts(unittest.TestCase):
             self.assertNotIn("sqlite", workflow_text.lower())
             self.assertNotIn("upload-artifact", workflow_text)
             single = yaml.load(workflow_text, Loader=yaml.BaseLoader)
-            self.assertEqual(set(single["on"]), {"workflow_dispatch"})
+            self.assertEqual(set(single["on"]),
+                             {"workflow_dispatch", "workflow_call"} if name == "structured-wikipedia.yml"
+                             else {"workflow_dispatch"})
             if name == "structured-wikipedia.yml":
                 self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["mirror_kaggle"]["default"], "true")
                 self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["publish_zenodo"]["default"], "true")
+        fleet_job = fleet["jobs"]["publish"]
+        self.assertEqual(fleet_job["uses"], "./.github/workflows/structured-wikipedia.yml")
+        self.assertEqual(fleet_job["secrets"], "inherit")
+        self.assertEqual(fleet_job["strategy"]["fail-fast"], "false")
+        self.assertEqual(fleet["on"]["workflow_dispatch"]["inputs"]["parallelism"]["default"], "8")
         self.assertIn("--publish", (root / "zenodo-parquet.yml").read_text())
 
     def test_cli_entrypoints_import_without_scripts_package_errors(self):
