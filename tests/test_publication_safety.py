@@ -98,6 +98,53 @@ class TestIncrementalFleet(unittest.TestCase):
                 self.assertFalse(current_manifest(SimpleNamespace(token=None), repo, name,
                                                    "sqlite", "x" * 64, remote))
 
+    def test_transient_manifest_failure_retries_instead_of_rebuilding(self):
+        from scripts.structured_fleet import current_manifest
+
+        repo = "ffatty/plain-text-wikipedia-simpleenglish"
+        name = "simplewiki_01_of_01"
+        artifact = f"structured/parquet/{name}.parquet"
+        remote = {
+            f"structured/manifests/{name}.parquet.json": object(),
+            artifact: SimpleNamespace(lfs={"sha256": "b" * 64}, size=123),
+        }
+        info = {
+            "source_sha256": "a" * 64, "articles": 1,
+            "artifacts": {"parquet": {
+                "path": f"parquet/{name}.parquet",
+                "sha256": "b" * 64, "size_bytes": 123,
+            }},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text(json.dumps(info))
+            with (patch("scripts.structured_fleet.hf_hub_download",
+                        side_effect=[TimeoutError("temporary"), str(path)]) as download,
+                  patch("scripts.structured_fleet.time.sleep") as delay):
+                self.assertTrue(current_manifest(SimpleNamespace(token=None),
+                                                 repo, name, "parquet", "a" * 64, remote))
+                self.assertEqual(download.call_count, 2)
+                delay.assert_called_once()
+            remote[artifact].size = 100
+            with patch("scripts.structured_fleet.hf_hub_download", return_value=str(path)):
+                self.assertFalse(current_manifest(SimpleNamespace(token=None),
+                                                  repo, name, "parquet", "a" * 64, remote))
+
+    def test_permanent_manifest_auth_error_does_not_look_stale(self):
+        from scripts.structured_fleet import current_manifest
+        from requests.exceptions import HTTPError
+
+        repo = "ffatty/plain-text-wikipedia-simpleenglish"
+        name = "simplewiki_01_of_01"
+        remote = {f"structured/manifests/{name}.parquet.json": object()}
+        response = SimpleNamespace(status_code=403)
+        exception = HTTPError("Forbidden", response=response)
+        with patch("scripts.structured_fleet.hf_hub_download", side_effect=exception) as dl:
+            with self.assertRaises(HTTPError):
+                current_manifest(SimpleNamespace(token=None), repo, name,
+                                 "parquet", "a" * 64, remote)
+            dl.assert_called_once()
+
     def test_language_titles_preserve_hyphenated_names(self):
         self.assertEqual(language_name("ffatty/plain-text-wikipedia-simpleenglish"),
                          "Simple English")

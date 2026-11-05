@@ -20,7 +20,8 @@ class ZenodoResumeTests(unittest.TestCase):
             title = "Plaintext Wikipedia (simpleenglish) — Parquet edition"
             metadata = {"language": "simpleenglish", "source_url": "https://example.org",
                         "files": [{"source_sha256": "a" * 64}]}
-            asset = Asset("structured/parquet/foo.parquet", "b" * 64, parquet.stat().st_size)
+            asset = Asset("structured/parquet/foo.parquet", "b" * 64,
+                          parquet.stat().st_size, md5=checksum)
             draft = {
                 "id": 999, "submitted": False, "metadata": {"title": title},
                 "links": {
@@ -48,7 +49,7 @@ class ZenodoResumeTests(unittest.TestCase):
             )
             with (patch.dict(os.environ, {"ZENODO_TOKEN": "fake"}),
                   patch("scripts.release_parquet.list_matching_depositions", return_value=[draft]),
-                  patch("scripts.release_parquet.fetch_verified", return_value=parquet),
+                  patch("scripts.release_parquet.fetch_verified", return_value=parquet) as fetch,
                   patch("requests.put", side_effect=put),
                   patch("requests.delete") as delete,
                   patch("requests.post", return_value=published) as post):
@@ -57,15 +58,35 @@ class ZenodoResumeTests(unittest.TestCase):
                                [asset], metadata, None)
 
             delete.assert_not_called()
+            fetch.assert_not_called()  # Skip both the download and extra SHA256 scan.
             self.assertEqual(len(uploaded), 1)
             self.assertTrue(uploaded[0][0].endswith("/provenance.json"))
             post.assert_called_once()
+
+    def test_verified_parquet_download_uses_shared_hf_cache(self):
+        from scripts.release_parquet import fetch_verified
+
+        with tempfile.TemporaryDirectory() as folder:
+            parquet = Path(folder) / "test.parquet"
+            parquet.write_bytes(b"PAR1 cache hit PAR1")
+            digest = hashlib.sha256(parquet.read_bytes()).hexdigest()
+            asset = Asset("structured/parquet/test.parquet", digest, parquet.stat().st_size)
+            with patch("scripts.release_parquet.hf_hub_download", return_value=str(parquet)) as hub:
+                self.assertEqual(fetch_verified(SimpleNamespace(token=None), "ffatty/wiki", asset),
+                                 parquet)
+                self.assertNotIn("local_dir", hub.call_args.kwargs)
+            with patch("scripts.release_parquet.hf_hub_download", return_value=str(parquet)):
+                bad = Asset(asset.path, "0" * 64, asset.size)
+                with self.assertRaisesRegex(ValueError, "SHA256"):
+                    fetch_verified(SimpleNamespace(token=None), "ffatty/wiki", bad)
 
     def test_rejected_checksum_never_publishes_a_doi(self):
         with tempfile.TemporaryDirectory() as temporary:
             parquet = Path(temporary) / "foo.parquet"
             parquet.write_bytes(b"PAR1 verified PAR1")
-            asset = Asset("structured/parquet/foo.parquet", "b" * 64, parquet.stat().st_size)
+            asset = Asset("structured/parquet/foo.parquet", "b" * 64,
+                          parquet.stat().st_size,
+                          md5=hashlib.md5(parquet.read_bytes(), usedforsecurity=False).hexdigest())
             draft = {
                 "id": 111, "submitted": False, "metadata": {
                     "title": "Plaintext Wikipedia (simpleenglish) — Parquet edition"},

@@ -88,16 +88,25 @@ def current_manifest(api, repo: str, name: str, kind: str,
     if path not in remote:
         return False
     try:
-        found = json.loads(Path(hf_hub_download(
-            repo, filename=path, repo_type="dataset", token=api.token)).read_text())
+        filename = retry(f"read manifest {name}.{kind}", lambda: hf_hub_download(
+            repo, filename=path, repo_type="dataset", token=api.token))
+        found = json.loads(Path(filename).read_text())
         record = found["artifacts"][kind]
         artifact = remote.get(f"structured/{record['path']}")
         artifact_sha = source_hash(artifact) if artifact is not None else None
         return (found["source_sha256"] == source_digest
+                and (kind != "parquet" or (isinstance(found.get("articles"), int)
+                                           and found["articles"] > 0))
                 and artifact is not None
+                and (record.get("size_bytes") is None or
+                     getattr(artifact, "size", None) in
+                     (None, int(record["size_bytes"])))
                 and (artifact_sha is None or artifact_sha == record["sha256"])
                 and (not require_fts or record.get("fts5") is True))
-    except (OSError, KeyError, ValueError, TypeError):
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if transient_error(exc) or status in (401, 403):
+            raise  # Network or permissions issue, not stale data.
         return False
 
 

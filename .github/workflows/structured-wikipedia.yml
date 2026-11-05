@@ -85,7 +85,12 @@ jobs:
 
       - name: Build only missing Parquet; publish to existing Hugging Face dataset
         id: hf
-        run: python scripts/structured_fleet.py build --repo "$REPO"
+        shell: bash
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          trap 'echo "- HF phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
+          python scripts/structured_fleet.py build --repo "$REPO"
 
       - name: Publish original + Parquet into existing Kaggle dataset
         if: ${{ steps.hf.outcome == 'success' && inputs.mirror_kaggle }}
@@ -94,6 +99,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          SECONDS=0
+          trap 'echo "- Kaggle phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
           python scripts/kaggle_auth.py --owner ffatty
           python scripts/structured_kaggle.py --repo "$REPO" --max-mb "$MAX_MB" --require-publish
 
@@ -101,7 +108,12 @@ jobs:
         if: ${{ steps.hf.outcome == 'success' && inputs.publish_zenodo }}
         id: zenodo
         continue-on-error: true
-        run: python scripts/release_parquet.py --repo "$REPO" --publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          SECONDS=0
+          trap 'echo "- Zenodo phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
+          python scripts/release_parquet.py --repo "$REPO" --publish
 
       - name: Summarize all enabled destinations; fail explicitly on partial release
         if: always()

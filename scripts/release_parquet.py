@@ -28,6 +28,7 @@ class Asset:
     path: str
     sha256: str
     size: int
+    md5: str | None = None
 
 
 def dataset_slug(repo: str) -> str:
@@ -84,7 +85,11 @@ def inventory(api: HfApi, repo: str) -> tuple[list[Asset], dict]:
         parquet_lfs = lfs_sha(actual_info)
         if parquet_lfs and parquet_lfs != artifact["sha256"]:
             raise ValueError(f"Parquet artifact SHA256 mismatch for {artifact_path}")
-        assets.append(Asset(artifact_path, artifact["sha256"], int(artifact["size_bytes"])))
+        md5 = artifact.get("md5")
+        if md5 is not None and not re.fullmatch(r"[0-9a-f]{32}", md5):
+            raise ValueError(f"Invalid Parquet MD5 in {manifest_path}")
+        assets.append(Asset(artifact_path, artifact["sha256"],
+                            int(artifact["size_bytes"]), md5))
         details.append({
             "source_file": source,
             "source_sha256": manifest["source_sha256"],
@@ -116,10 +121,11 @@ def limits(assets: list[Asset]):
     return total
 
 
-def fetch_verified(api: HfApi, repo: str, asset: Asset, directory: Path) -> Path:
+def fetch_verified(api: HfApi, repo: str, asset: Asset) -> Path:
+    # Use the standard HF cache rather than an isolated temporary local_dir.
+    # The preceding Kaggle step may already have downloaded this exact blob.
     path = Path(hf_hub_download(repo_id=repo, filename=asset.path,
-                                repo_type="dataset", token=api.token,
-                                local_dir=directory))
+                                repo_type="dataset", token=api.token))
     if path.stat().st_size != asset.size or sha256(path) != asset.sha256:
         raise ValueError(f"SHA256/size mismatch: {asset.path}")
     return path
@@ -233,6 +239,17 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     old_files = {file["filename"]: file for file in draft.get("files", [])}
     wanted = {Path(asset.path).name for asset in assets} | {"provenance.json"}
 
+    def remote_matches(filename: str, size: int, md5: str) -> bool:
+        prior_file = old_files.get(filename)
+        if not prior_file:
+            return False
+        try:
+            old_size = int(prior_file.get("filesize", -1))
+        except (TypeError, ValueError):
+            return False
+        return (old_size == size and
+                str(prior_file.get("checksum") or "").removeprefix("md5:").lower() == md5)
+
     def remove_old(file):
         response = requests.delete(f"{url}/{draft['id']}/files/{file['id']}",
                                    headers=headers, timeout=30)
@@ -242,17 +259,14 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
         if name not in wanted:
             remove_old(file)
 
-    def upload_verified(file: Path, timeout: int):
-        with file.open("rb") as stream:
-            md5 = hashlib.file_digest(stream, "md5").hexdigest()
+    def upload_verified(file: Path, timeout: int, known_md5: str | None = None):
+        md5 = known_md5
+        if md5 is None:
+            with file.open("rb") as stream:
+                md5 = hashlib.file_digest(stream, "md5").hexdigest()
         prior_file = old_files.get(file.name)
         if prior_file:
-            try:
-                same_size = int(prior_file.get("filesize", -1)) == file.stat().st_size
-            except (TypeError, ValueError):
-                same_size = False
-            checksum = (prior_file.get("checksum") or "").removeprefix("md5:")
-            if same_size and checksum.lower() == md5:
+            if remote_matches(file.name, file.stat().st_size, md5):
                 print(f"REUSED Zenodo draft file: {file.name}", flush=True)
                 return
             remove_old(prior_file)
@@ -270,9 +284,13 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
         info = root / "provenance.json"
         info.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
         for index, asset in enumerate(assets, 1):
-            with tempfile.TemporaryDirectory(dir=root) as folder:
-                source = fetch_verified(api, repo, asset, Path(folder))
-                upload_verified(source, 7200)
+            if asset.md5 and remote_matches(Path(asset.path).name, asset.size, asset.md5):
+                # Existing draft bytes match the independently recorded HF
+                # identity. Do not download the Parquet just to hash it again.
+                print(f"REUSED Zenodo draft from manifest: {asset.path}", flush=True)
+                continue
+            source = fetch_verified(api, repo, asset)
+            upload_verified(source, 7200, asset.md5)
             print(f"Processed {index}/{len(assets)}: {asset.path}", flush=True)
         upload_verified(info, 300)
     published = requests.post(publish_url, headers=headers, timeout=90)
