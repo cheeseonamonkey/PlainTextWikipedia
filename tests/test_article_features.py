@@ -157,6 +157,10 @@ class ArticleFeaturesTests(unittest.TestCase):
     def test_unicode_normalization_and_int8_round_trip(self):
         self.assertEqual(fold("It’s “Nice”—WOW"), "it's \"nice\"-wow")
         self.assertIn("日本", tokens("日本語"))
+        self.assertEqual(tokens("İstanbul"), ["i\u0307stanbul"])
+        self.assertEqual(tokens("ΣΊΓΜΑ"), ["σίγμα"])
+        self.assertEqual(tokens("ПРИВЕТ"), ["привет"])
+        self.assertEqual(tokens("CAFÉ"), ["café"])
         self.assertEqual(fold("ΣΊΓΜΑ"), "σίγμα")
         self.assertEqual(fold("СТАТЬЯ"), "статья")
         self.assertEqual(fold("İSTANBUL"), "i\u0307stanbul")
