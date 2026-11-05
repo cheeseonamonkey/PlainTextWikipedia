@@ -101,7 +101,7 @@ def inventory(api: HfApi, repo: str) -> tuple[list[Asset], dict]:
         "formats": ["parquet"],
         "coverage_warning": "See data/build-manifest.json on HF before claiming complete Wikipedia coverage.",
         "wikipedia_page_ids_available": False,
-        "license": "CC BY-SA 3.0 (check Wikimedia source reuse terms)",
+        "license": "CC BY-SA 4.0 (consult Wikimedia reuse requirements)",
         "files": details,
     }
     return assets, metadata
@@ -146,7 +146,7 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
                 "Source records do not retain Wikipedia page IDs.</p>"
             ),
             "creators": [{"name": "cheeseonamonkey"}],
-            "license": "cc-by-sa-3.0",
+            "license": "cc-by-sa-4.0",
             "keywords": ["wikipedia", "corpus", "parquet", "multilingual", "plain text"],
         }
     }
