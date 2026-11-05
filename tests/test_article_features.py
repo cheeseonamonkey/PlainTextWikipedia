@@ -168,6 +168,9 @@ class ArticleFeaturesTests(unittest.TestCase):
         for name, importance in FUSION_IMPORTANCE.items():
             self.assertAlmostEqual(shares[name], importance, places=6)
         self.assertAlmostEqual(sum(shares.values()), 1., places=6)
+        inverted, _ = combined_vector(semantic, lexical, metrics, -bekko)
+        self.assertAlmostEqual(float(np.dot(mixed, inverted)),
+                               1 - 2 * FUSION_IMPORTANCE["bekko"], places=6)
         self.assertTrue(np.array_equal(
             mixed, combined_vector(semantic, lexical, metrics, bekko)[0]))
         _, missing = combined_vector(None, lexical, metrics, bekko)
