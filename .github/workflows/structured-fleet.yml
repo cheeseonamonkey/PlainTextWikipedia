@@ -21,9 +21,9 @@ on:
         type: boolean
         default: true
       kaggle_stage_mb:
-        description: Maximum Kaggle staging per runner (MiB)
+        description: Kaggle staging cap in MiB (0 = automatic)
         type: number
-        default: 5000
+        default: 0
 
 permissions:
   contents: read
