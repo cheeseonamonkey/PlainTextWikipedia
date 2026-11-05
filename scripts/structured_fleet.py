@@ -121,27 +121,73 @@ LARGE_LANGUAGES = (
 SIMPLE = "ffatty/plain-text-wikipedia-simpleenglish"
 
 
+def language_aliases(repos: list[str]) -> dict[str, set[str]]:
+    """Resolve Wikimedia project IDs and legacy dataset slugs to published repos.
+
+    Aliases come from the same source catalog and environment configuration
+    used by the dataset publishers, rather than a separate hand-maintained list.
+    An alias never creates or selects an unpublished dataset.
+    """
+    config = Path(__file__).resolve().parents[1] / "config"
+    aliases: dict[str, set[str]] = {}
+
+    def add(key: str, repo: str) -> None:
+        if repo in repos:
+            aliases.setdefault(key.lower(), set()).add(repo)
+
+    for repo in repos:
+        slug = repo.rsplit("/", 1)[-1].removeprefix("plaintext-wikipedia-full-")
+        add(repo, repo)
+        add(slug, repo)
+
+    for language in json.loads(
+        (config / "additional-languages.json").read_text(encoding="utf-8")
+    )["languages"]:
+        project = language["project"].lower()
+        if not project.endswith("wiki"):
+            raise ValueError(f"Invalid Wikimedia project: {project}")
+        repo = f"{PREFIX}plaintext-wikipedia-full-{language['slug']}"
+        add(project, repo)
+        add(project.removesuffix("wiki"), repo)
+
+    # Main language repos use these existing publication settings, rather
+    # than entries in additional-languages.json.
+    for line in (config / "datasets.env").read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"FULL_HF_REPO_([A-Z_]+)=(ffatty/[^\s#]+)", line.strip())
+        if match:
+            code, repo = match.groups()
+            add(code.lower(), repo)
+            add(f"{code.lower()}wiki", repo)
+
+    # Simple English has a separate existing dataset and Wikimedia project.
+    for alias in ("simple", "simplewiki", "simpleenglish"):
+        add(alias, SIMPLE)
+    return aliases
+
+
 def select_repos(repos: list[str], only: str = "") -> list[str]:
     if only.strip():
-        requested = {word.strip().lower() for word in only.split(",") if word.strip()}
-        names = {repo: repo.rsplit("/", 1)[-1].removeprefix("plaintext-wikipedia-full-")
-                 for repo in repos}
-        matches = [repo for repo in repos
-                   if repo.lower() in requested or names[repo] in requested
-                   or (repo == SIMPLE and "simpleenglish" in requested)]
-        unknown = requested - {value for repo in matches for value in
-                               (repo.lower(), names[repo])} - (
-                                   {"simpleenglish"} if SIMPLE in matches else set())
-        if unknown:
-            raise ValueError(f"Unknown/unpublished Wikipedia datasets: {', '.join(sorted(unknown))}")
-        repos = matches
+        aliases = language_aliases(repos)
+        selected: set[str] = set()
+        for token in (part.strip().lower() for part in only.split(",")):
+            if not token:
+                continue
+            matches = aliases.get(token, set())
+            if not matches:
+                raise ValueError(f"Unknown/unpublished Wikipedia language: {token}")
+            if len(matches) != 1:
+                raise ValueError(f"Ambiguous Wikipedia language: {token} -> "
+                                 f"{', '.join(sorted(matches))}")
+            selected.update(matches)
+        if not selected:
+            raise ValueError("No Wikipedia languages selected")
+        repos = list(selected)
     priority = {name: index for index, name in enumerate(LARGE_LANGUAGES)}
     return sorted(repos, key=lambda repo: (
         -1 if repo == SIMPLE else priority.get(
             repo.rsplit("/", 1)[-1].removeprefix("plaintext-wikipedia-full-"), 100),
         repo,
     ))
-
 
 def plan(only: str = "") -> None:
     api = HfApi(token=os.getenv("HF_TOKEN") or None)
@@ -240,7 +286,7 @@ def main():
     sub = p.add_subparsers(dest="command", required=True)
     selector = sub.add_parser("plan")
     selector.add_argument("--only", default="",
-                          help="Comma-separated existing dataset IDs or language slugs")
+                          help="Comma-separated Wikimedia codes (en, simple, shwiki), slugs or dataset IDs")
     b = sub.add_parser("build")
     b.add_argument("--repo", required=True)
     args = p.parse_args()

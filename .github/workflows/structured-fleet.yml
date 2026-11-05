@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       languages:
-        description: Optional comma-separated dataset IDs or language slugs (blank = all existing datasets)
+        description: Comma-separated Wikimedia codes (simple,en), slugs or repo IDs; blank = all
         type: string
         required: false
         default: ""
