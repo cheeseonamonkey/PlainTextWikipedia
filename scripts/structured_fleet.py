@@ -222,6 +222,7 @@ def build(repo: str) -> None:
     token = os.getenv("HF_TOKEN")
     if not token:
         raise RuntimeError("HF_TOKEN required for additive publishing")
+    code = wiki_code(repo)  # Validate before any large archive downloads.
     api = HfApi(token=token)
     sources, remote = retry("list existing HF files", lambda: source_files(api, repo))
     if not sources:
@@ -253,7 +254,7 @@ def build(repo: str) -> None:
                         print(f"SKIP already-current {repo}/{name}", flush=True)
                         continue
                 result = export(source, working / "output", "parquet",
-                                wiki_code=wiki_code(repo))
+                                wiki_code=code)
                 if result["source_sha256"] != digest:
                     raise ValueError(f"Source LFS SHA256 mismatch: {path}")
 
