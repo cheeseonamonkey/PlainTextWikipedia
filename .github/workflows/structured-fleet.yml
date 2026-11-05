@@ -20,7 +20,7 @@ on:
       kaggle_stage_mb:
         description: Compressed staging limit per Kaggle runner (MiB); oversized releases fail visibly
         type: number
-        default: 2500
+        default: 5000
 
 permissions:
   contents: read
