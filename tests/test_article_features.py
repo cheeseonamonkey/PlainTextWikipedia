@@ -110,6 +110,26 @@ class ArticleFeaturesTests(unittest.TestCase):
         self.assertTrue(np.any(dequantize(rows[0]["vector_q8_b64"],
                                             rows[0]["vector_scales_b64"])[:160]))
 
+    def test_fasttext_worker_can_train_and_reload(self):
+        import fasttext
+        import subprocess
+        import sys
+
+        corpus = self.root / "tiny-train.txt"
+        corpus.write_text(
+            ("planets orbit stars and moons orbit planets in space\n" * 256),
+            encoding="utf-8")
+        output = self.root / "small-model.bin"
+        subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parents[1] /
+                                  "scripts/article_features.py"),
+             "_train", str(corpus), str(output), "16", "1"],
+            check=True, timeout=55, capture_output=True,
+        )
+        model = fasttext.load_model(str(output))
+        self.assertEqual(model.get_dimension(), 16)
+        self.assertEqual(len(model.get_word_vector("orbit")), 16)
+
     def test_unicode_normalization_and_int8_round_trip(self):
         self.assertEqual(fold("It’s “Nice”—WOW"), "it's \"nice\"-wow")
         self.assertIn("日本", tokens("日本語"))
