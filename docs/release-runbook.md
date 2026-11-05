@@ -39,8 +39,13 @@ The controller discovers existing Hugging Face language repositories, checks
 the publisher credentials **once**, then calls the same reusable per-language
 workflow available from **Publish one Wikipedia dataset**. GitHub queues the
 remaining matrix jobs; no separate workflow-dispatch events or artifact handoffs.
-Use `parallelism` (1–12) to tune concurrency, or `languages` (comma-separated
-existing dataset IDs or slugs) to retry only failed editions.
+Use `parallelism` (1–12) to tune concurrency, or `languages` to retry only
+selected editions. The selector accepts **Wikimedia language codes** (e.g.
+`simple,en,sh,zh_classical`), full project IDs (`enwiki`, `shwiki`), dataset
+slugs (`english`, `serbo-croatian`), or complete published Hugging Face IDs.
+Codes are resolved from `config/additional-languages.json` plus the original
+major-language sources. Unknown, unpublished, or ambiguous codes fail during
+planning rather than selecting the wrong edition.
 
 The cheap Simple English edition runs first as a smoke check, followed by the
 largest likely editions to avoid a long trailing job. Actual runtime depends
@@ -68,7 +73,7 @@ discarded to fake a successful Kaggle version.
 
 **Reruns:** Source/artifact SHA256 manifests allow successful HF shards,
 unchanged Kaggle datasets, and unchanged Zenodo records to skip redundant work.
-Use `languages` to retry only failures (e.g. `english,serbo-croatian`).
+Use `languages` to retry only failures (e.g. `en,sh`).
 Only temporary network errors are retried with exponential backoff and jitter;
 authentication and bad-source errors fail immediately.
 
