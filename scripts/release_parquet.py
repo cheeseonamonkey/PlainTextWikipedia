@@ -74,7 +74,9 @@ def inventory(api: HfApi, repo: str) -> tuple[list[Asset], dict]:
         if not artifact_path.endswith(".parquet") or not manifest.get("articles"):
             raise ValueError(f"Invalid structured manifest: {manifest_path}")
         source_lfs = lfs_sha(files[source])
-        if source_lfs and source_lfs != manifest["source_sha256"]:
+        if not source_lfs:
+            raise ValueError(f"Unverifiable source hash for {source}; refuse an archival DOI")
+        if source_lfs != manifest["source_sha256"]:
             raise ValueError(f"Stale Parquet export for {source}")
         actual_info = files[artifact_path]
         if int(actual_info.size) != int(artifact["size_bytes"]):
@@ -153,6 +155,14 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     if record_id:
         original = requests.get(f"{url}/{record_id}", headers=headers, timeout=30)
         original.raise_for_status()
+        previous = original.json()
+        # A new-version draft inherits old files. Refuse silent carry-over of
+        # obsolete Parquet shards; it would misrepresent the published corpus.
+        old_names = {item["filename"] for item in previous.get("files", [])}
+        expected_names = {Path(asset.path).name for asset in assets} | {"provenance.json"}
+        if old_names != expected_names:
+            raise ValueError("Existing Zenodo file set differs from this release; "
+                             "manual review required before creating a new version")
         response = requests.post(f"{url}/{record_id}/actions/newversion",
                                  headers=headers, timeout=30)
         response.raise_for_status()
