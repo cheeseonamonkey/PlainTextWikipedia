@@ -16,9 +16,10 @@ from unittest.mock import patch
 
 import yaml
 
-from scripts.release_parquet import Asset, dataset_slug, inventory, limits
+from scripts.release_parquet import (Asset, dataset_slug, inventory, limits,
+                                    provenance_fingerprint, list_matching_depositions)
 from scripts.structured_fleet import current_manifest
-from scripts.structured_kaggle import language_name
+from scripts.structured_kaggle import language_name, mirror
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -103,6 +104,33 @@ class TestIncrementalFleet(unittest.TestCase):
                          "Serbo-Croatian")
 
 
+class TestPublishByDefault(unittest.TestCase):
+    def test_zenodo_version_hash_is_deterministic(self):
+        data = {"files": [{"source_sha256": "a" * 64}], "source_repo": "ffatty/wiki"}
+        self.assertEqual(provenance_fingerprint(data),
+                         provenance_fingerprint(dict(reversed(list(data.items())))))
+        self.assertNotEqual(provenance_fingerprint(data),
+                            provenance_fingerprint({"files": [], "source_repo": "ffatty/wiki"}))
+
+    def test_zenodo_ownership_search_paginates_and_filters_titles(self):
+        good = {"id": 123, "metadata": {"title": "target"}}
+        irrelevant = {"id": 44, "metadata": {"title": "other"}}
+        def query(url, headers, params, timeout):
+            page = params["page"]
+            items = [irrelevant] * 100 if page == 1 else [good]
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: items)
+        matches = list_matching_depositions(SimpleNamespace(get=query),
+                                            "https://zenodo.org/api/deposit/depositions",
+                                            {"Authorization": "fake"}, "target")
+        self.assertEqual(matches, [good])
+
+    def test_required_kaggle_cannot_skip_unpublished_dataset(self):
+        with patch("scripts.structured_kaggle.HfApi") as api:
+            api.return_value.list_repo_tree.return_value = []
+            with self.assertRaisesRegex(RuntimeError, "No source archives"):
+                mirror("ffatty/plain-text-wikipedia-simpleenglish",
+                       max_mb=2500, require_publish=True)
+
 class TestCIContracts(unittest.TestCase):
     def test_new_release_workflows_are_manual_only(self):
         for name in ("structured-fleet.yml", "zenodo-parquet.yml",
@@ -114,9 +142,16 @@ class TestCIContracts(unittest.TestCase):
                 )
                 self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
                 self.assertEqual(workflow["permissions"]["contents"], "read")
-        zenodo = (ROOT / ".github/workflows/zenodo-parquet.yml").read_text()
-        self.assertIn("default: false", zenodo)
-        self.assertIn("--publish", zenodo)
+        root = ROOT / ".github" / "workflows"
+        zenodo = yaml.load((root / "zenodo-parquet.yml").read_text(), Loader=yaml.BaseLoader)
+        fleet = yaml.load((root / "structured-fleet.yml").read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(zenodo["on"]["workflow_dispatch"]["inputs"]["publish"]["default"],
+                         "true")
+        inputs = fleet["on"]["workflow_dispatch"]["inputs"]
+        self.assertEqual(inputs["publish_zenodo"]["default"], "true")
+        self.assertEqual(inputs["mirror_kaggle"]["default"], "true")
+        self.assertNotIn("upload-artifact", (root / "structured-fleet.yml").read_text())
+        self.assertIn("--publish", (root / "zenodo-parquet.yml").read_text())
 
     def test_cli_entrypoints_import_without_scripts_package_errors(self):
         for script in ("scripts/multistream_shards.py", "scripts/current_export.py",
