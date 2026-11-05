@@ -15,6 +15,18 @@ import zstandard as zstd
 from scripts.article_features import (
     DENSE_DIMS, build, dequantize, fold, quantize, tokens,
 )
+from scripts.bekko_features import embedding_input
+
+
+class FakeBekko:
+    calls = []
+
+    def encode(self, texts):
+        self.calls.extend(texts)
+        embeddings = np.zeros((len(texts), 128), dtype=np.float32)
+        embeddings[:, 0] = .8
+        embeddings[:, 1] = .6
+        return embeddings, [min(50, len(text.split()) + 2) for text in texts]
 
 
 class ArticleFeaturesTests(unittest.TestCase):
@@ -36,10 +48,11 @@ class ArticleFeaturesTests(unittest.TestCase):
                     f.write(f"{title}\n{body}\n\n")
 
     def read_result(self, dest):
-        report = build(self.sources, dest, "simple",
-                       vocab_size=100, shortlist=20,
-                       max_train_tokens=100, sample_mod=100,
-                       allow_lexical_only=True)
+        with patch("scripts.bekko_features.BekkoEncoder", FakeBekko):
+            report = build(self.sources, dest, "simple",
+                           vocab_size=100, shortlist=20,
+                           max_train_tokens=100, sample_mod=100,
+                           allow_lexical_only=True)
         with gzip.open(dest / "article-metrics.csv.gz", "rt", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         with gzip.open(dest / "vocabulary.json.gz", "rt", encoding="utf-8") as f:
@@ -55,6 +68,8 @@ class ArticleFeaturesTests(unittest.TestCase):
         self.assertEqual(report["documents"], 4)
         self.assertEqual(len(rows), 4)
         self.assertEqual(report["vector"]["dimensions"], 200)
+        self.assertEqual(report["bekko"]["dimensions"], 128)
+        self.assertTrue(report["bekko"]["required"])
         self.assertTrue(report["lexical"]["fts5"])
         self.assertEqual(vocab["documents"], 4)
         self.assertEqual(report["vocabulary_size"], len(vocab["terms"]))
@@ -67,6 +82,11 @@ class ArticleFeaturesTests(unittest.TestCase):
         for row in rows:
             self.assertEqual(len(dequantize(row["vector_q8_b64"],
                                             row["vector_scales_b64"])), 200)
+            self.assertEqual(len(dequantize(row["fasttext_q8_b64"],
+                                            row["fasttext_scales_b64"])), 160)
+            self.assertEqual(len(dequantize(row["bekko_q8_b64"],
+                                            row["bekko_scales_b64"])), 128)
+            self.assertEqual(row["bekko_available"], "1")
             self.assertIsInstance(json.loads(row["word_counts_json"]), dict)
             self.assertIsInstance(json.loads(row["tfidf_sparse_json"]), list)
             self.assertIsInstance(json.loads(row["bm15_sparse_json"]), list)
@@ -99,7 +119,8 @@ class ArticleFeaturesTests(unittest.TestCase):
         def train_stub(training, dest, *_args, **_kwargs):
             dest.write_bytes(b"fake-fasttext-model")
             return FakeFastText(), None
-        with patch("scripts.article_features.train_fasttext", side_effect=train_stub):
+        with (patch("scripts.article_features.train_fasttext", side_effect=train_stub),
+              patch("scripts.bekko_features.BekkoEncoder", FakeBekko)):
             dest = self.root / "semantic"
             result = build(self.sources, dest, "simple", vocab_size=100, shortlist=20)
             with gzip.open(dest / "article-metrics.csv.gz", "rt", encoding="utf-8") as f:
@@ -108,7 +129,9 @@ class ArticleFeaturesTests(unittest.TestCase):
         self.assertTrue((dest / "fasttext.bin.zst").exists())
         self.assertTrue(all(row["semantic_available"] == "1" for row in rows))
         self.assertTrue(np.any(dequantize(rows[0]["vector_q8_b64"],
-                                            rows[0]["vector_scales_b64"])[:160]))
+                                            rows[0]["vector_scales_b64"])[:96]))
+        self.assertTrue(np.any(dequantize(rows[0]["vector_q8_b64"],
+                                            rows[0]["vector_scales_b64"])[96:160]))
 
     def test_fasttext_worker_can_train_and_reload(self):
         import fasttext
@@ -134,11 +157,25 @@ class ArticleFeaturesTests(unittest.TestCase):
     def test_unicode_normalization_and_int8_round_trip(self):
         self.assertEqual(fold("It’s “Nice”—WOW"), "it's \"nice\"-wow")
         self.assertIn("日本", tokens("日本語"))
+        self.assertEqual(fold("ΣΊΓΜΑ"), "σίγμα")
+        self.assertEqual(fold("СТАТЬЯ"), "статья")
+        self.assertEqual(fold("İSTANBUL"), "i\u0307stanbul")
+        self.assertIn("月", fold("月"))
+        self.assertEqual(embedding_input("ΣΊΓΜΑ", "“HELLO” İstanbul WORLD"),
+                         'σίγμα "hello" i\u0307stanbul world')
+        self.assertEqual(fold("Ｆｏｏ"), "foo")
         vec = np.linspace(-1., 1., DENSE_DIMS, dtype=np.float32)
         encoded, scales = quantize(vec)
         again = dequantize(encoded, scales)
         self.assertEqual(len(again), DENSE_DIMS)
         self.assertLess(float(np.max(np.abs(vec - again))), .02)
+
+    def test_every_article_is_embedded_not_sampled(self):
+        FakeBekko.calls = []
+        self.read_result(self.root / "once")
+        self.assertEqual(len(FakeBekko.calls), 4)
+        self.assertEqual(FakeBekko.calls[0], "orbit planets orbit stars. stars orbit galaxies.")
+        self.assertTrue(all(text == fold(text) for text in FakeBekko.calls))
 
     def test_bad_inputs_rejected(self):
         with self.assertRaisesRegex(ValueError, "tfidf size"):
