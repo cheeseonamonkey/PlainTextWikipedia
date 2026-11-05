@@ -56,6 +56,8 @@ def transient_error(exc: Exception) -> bool:
     status = getattr(response, "status_code", None)
     if status is not None:
         return status in (408, 409, 425, 429) or 500 <= status < 600
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (408, 409, 425, 429) or 500 <= exc.code < 600
     if isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError)):
         return True
     try:
