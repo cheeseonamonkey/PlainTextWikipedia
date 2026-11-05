@@ -94,7 +94,8 @@ def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> s
         if result.returncode != 0:
             # Dependency/import failures and transient service errors do NOT
             # establish bad credentials. Surface these separately.
-            diagnostics = (result.stderr + "\n" + result.stdout).lower()
+            diagnostics = ((getattr(result, "stderr", "") or "") + "\n" +
+                           (getattr(result, "stdout", "") or "")).lower()
             if "modulenotfounderror" in diagnostics or "importerror" in diagnostics:
                 raise RuntimeError(
                     "Kaggle CLI could not import its dependencies (install kaggle and six); "
