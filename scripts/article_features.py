@@ -62,7 +62,7 @@ CSV_FIELDS = (
     "token_count", "distinct_terms", "vocab_terms", "tfidf_terms",
     "char_count", "byte_count", "sentence_count", "mean_sentence_tokens",
     "mean_token_chars", "lexical_diversity", "hapax_ratio", "stopword_ratio",
-    "digit_ratio", "punctuation_ratio", "repetition_ratio", "entropy",
+    "oov_or_filtered_ratio", "digit_ratio", "punctuation_ratio", "repetition_ratio", "entropy",
     "vocab_coverage", "tfidf_coverage", "mean_idf", "max_tfidf",
     "tfidf_l2", "tfidf_top5_share", "tfidf_entropy",
     "bm15_sum", "bm15_max", "saliency", "title_overlap",
@@ -190,6 +190,22 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
     articles = total_tokens = training_tokens = 0
     terms_tf, terms_df = Counter(), Counter()
     buffered = []
+
+    def flush():
+        if buffered:
+            db.executemany("""INSERT INTO articles(
+                source_file,source_ordinal,title,article_url,text,counts,
+                token_count,char_count,byte_count,sentence_count)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""", buffered)
+            buffered.clear()
+        if terms_tf:
+            db.executemany("""INSERT INTO terms VALUES(?,?,?)
+                ON CONFLICT(term) DO UPDATE SET
+                tf = tf + excluded.tf, df = df + excluded.df""",
+                ((term, tf, terms_df[term]) for term, tf in terms_tf.items()))
+            terms_tf.clear()
+            terms_df.clear()
+        db.commit()
     train_stream = training.open("w", encoding="utf-8")
     try:
         for source, ordinal, title, body in source_articles(files):
@@ -210,7 +226,7 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
             terms_tf.update(counts)
             terms_df.update(counts.keys())
             packed = zlib.compress(compact(counts).encode("utf-8"), level=1)
-            buffered.append((source, ordinal, title, url, body if fts5 else None,
+            buffered.append((source, ordinal, title, url, body,
                              packed, len(words), len(body), len(body.encode("utf-8")),
                              len(sentences)))
             # Stable deterministic sampling across every shard, bounded training.
@@ -221,35 +237,14 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
                 if selected:
                     train_stream.write(" ".join(selected) + "\n")
                     training_tokens += len(selected)
-            if len(buffered) >= 256:
-                db.executemany("""INSERT INTO articles(
-                    source_file,source_ordinal,title,article_url,text,counts,
-                    token_count,char_count,byte_count,sentence_count)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)""", buffered)
-                db.commit()
-                buffered.clear()
-        if buffered:
-            db.executemany("""INSERT INTO articles(
-                source_file,source_ordinal,title,article_url,text,counts,
-                token_count,char_count,byte_count,sentence_count)
-                VALUES (?,?,?,?,?,?,?,?,?,?)""", buffered)
-            db.commit()
+            if len(buffered) >= 512:
+                flush()
+        flush()
         if articles == 0:
             raise ValueError("No articles found")
-        # Aggregate once, then insert by chunk rather than a SQL upsert per token.
-        # For massive editions counters can be large; SQLite becomes the output
-        # model, not a separate word-stats in-memory copy of article content.
-        batch = []
-        for term, tf in terms_tf.items():
-            batch.append((term, tf, terms_df[term]))
-            if len(batch) >= 5000:
-                db.executemany("INSERT INTO terms VALUES(?,?,?)", batch)
-                batch.clear()
-        if batch:
-            db.executemany("INSERT INTO terms VALUES(?,?,?)", batch)
-        db.commit()
         return {"articles": articles, "tokens": total_tokens,
-                "train_tokens": training_tokens, "raw_vocabulary": len(terms_tf)}
+                "train_tokens": training_tokens,
+                "raw_vocabulary": db.execute("SELECT count(*) FROM terms").fetchone()[0]}
     finally:
         train_stream.close()
 
@@ -308,7 +303,8 @@ def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
     return fasttext.load_model(str(dest)), None
 
 
-def metrics_for_article(row, vocabulary_lookup, docs: int, avglen: float,
+def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
+                        docs: int, avglen: float,
                         fasttext_vectors: np.ndarray | None, training_tokens: int):
     (article_id, source_file, ordinal, title, url, body, blob,
      length, chars, bytes_, sentences) = row
@@ -320,7 +316,7 @@ def metrics_for_article(row, vocabulary_lookup, docs: int, avglen: float,
     # Only retain vocabulary word counts in the CSV; the SQLite counts BLOB
     # preserves *all* intermediary terms, including terms outside top 10K.
     known = {term: count for term, count in counts.items() if term in vocabulary_lookup}
-    stop = length - sum(known.values())
+    stop = sum(counts.get(term, 0) for term in stopwords)
     weighted, bmweighted, vecterms = [], [], []
     mass = bm_sum = 0.0
     title_terms = set(tokens(title))
@@ -396,7 +392,8 @@ def metrics_for_article(row, vocabulary_lookup, docs: int, avglen: float,
         "mean_token_chars": mean_token_chars, "lexical_diversity": distinct / total,
         "hapax_ratio": hapax / max(1, distinct),
         "stopword_ratio": stop / total,
-        "digit_ratio": sum(ch.isdigit() for ch in title + (body or "")) / max(1, chars),
+        "oov_or_filtered_ratio": 1 - vocab_coverage,
+        "digit_ratio": sum(ch.isdigit() for ch in (body or "")) / max(1, chars),
         "punctuation_ratio": sum(unicodedata.category(ch).startswith("P")
                                  for ch in (body or "")) / max(1, chars),
         "repetition_ratio": repetition, "entropy": entropy,
@@ -459,6 +456,9 @@ def build(files: list[Path], output: Path, code: str, *,
             entries = vocabulary(db, totals["articles"], code, vocab_size, shortlist)
             lookup = {term: (index, df, value_idf, enabled)
                       for index, term, _, df, value_idf, enabled in entries}
+            stopwords = (EN_STOP if code in {"en", "simple"} else set()).union(
+                term for (term,) in db.execute(
+                    "SELECT term FROM terms WHERE df > ?", (totals["articles"] * .80,)))
             model, reason = train_fasttext(training, model_path, totals["train_tokens"],
                                            timeout=timeout, threads=threads,
                                            allow_lexical_only=allow_lexical_only)
@@ -473,7 +473,8 @@ def build(files: list[Path], output: Path, code: str, *,
                     article_url,text,counts,token_count,char_count,byte_count,
                     sentence_count FROM articles ORDER BY id""")
                 for row in cur:
-                    result = metrics_for_article(row, lookup, totals["articles"], avglen,
+                    result = metrics_for_article(row, lookup, stopwords,
+                                                 totals["articles"], avglen,
                                                  vectors, totals["train_tokens"])
                     writer.writerow(result)
                     db.execute("INSERT INTO metrics VALUES (?,?)",
@@ -562,7 +563,7 @@ def main():
     p.add_argument("--no-fts5", action="store_true")
     p.add_argument("--allow-lexical-only", action="store_true")
     args = p.parse_args()
-    if args.sources[:1] == ["_train"]:
+    if args.sources and args.sources[0].name == "_train":
         train_fasttext_worker(Path(args.sources[1]), Path(args.sources[2]),
                               int(args.sources[3]), int(args.sources[4]))
         return
