@@ -3,9 +3,9 @@
 Convert official Wikimedia dumps into independently compressed, UTF-8 plaintext article archives. This maintained fork automates multilingual builds and publishes the output to **Hugging Face** and **Kaggle**, with curated Parquet-only research archives prepared for **Zenodo**.
 
 
-## Structured Parquet and SQLite editions
+## Original plaintext + Parquet editions
 
-Existing published plaintext shards can also be exported as **Zstandard Parquet** (ML/analytics) or **compressed SQLite** (offline SQL, optional FTS5 search). The new format files live alongside the original archives in the **same dataset per language**; no XML reconversion is required. The conversion is additive and preserves source SHA-256 provenance. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
+Existing published plaintext shards are also available as **Zstandard-compressed Parquet** for training and analytics. Each language keeps its original gzip archives and adds Parquet to the **same existing dataset**; no Wikimedia XML reconversion is required. Parquet exports preserve source SHA-256 provenance. Legacy SQLite files, where already published, are not regenerated. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
 
 **Release controls:** [3-destination runbook](docs/release-runbook.md) — offline regression tests, read-only credential checks, resumable multilingual exports, safe Kaggle versioning, and manual-only Zenodo DOI publication. When you manually start the full-fleet release, all three destinations publish by default; you can explicitly disable Kaggle or Zenodo. No full-fleet release starts automatically on merge.
 
