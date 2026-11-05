@@ -1,0 +1,140 @@
+name: Structured Wikipedia (Parquet + SQLite)
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_id:
+        description: Existing HF dataset in ffatty/ namespace
+        required: true
+        default: ffatty/plain-text-wikipedia-simpleenglish
+        type: string
+      format:
+        description: Output format
+        required: true
+        default: parquet
+        type: choice
+        options: [parquet, sqlite, both]
+      fts:
+        description: Add SQLite FTS5 full-text index
+        type: boolean
+        default: false
+      publish:
+        description: Publish beside existing raw files on Hugging Face
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths:
+      - scripts/structured_export.py
+      - tests/test_structured_export.py
+      - .github/workflows/structured-wikipedia.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wiki-structured-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.shards.outputs.matrix }}
+    env:
+      SOURCE_REPO: ${{ inputs.repo_id || 'ffatty/plain-text-wikipedia-simpleenglish' }}
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install huggingface_hub
+      - id: shards
+        run: |
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          repo = os.environ['SOURCE_REPO']
+          if not re.fullmatch(r'ffatty/[a-z0-9._-]+', repo):
+              raise ValueError('Only ffatty datasets are supported')
+          files = sorted(x for x in HfApi().list_repo_files(repo, repo_type='dataset')
+                         if x.startswith('data/') and x.endswith('.txt.gz'))
+          if not 1 <= len(files) <= 256:
+              raise ValueError(f'Unexpected source archive count: {len(files)}')
+          entries = [{'archive': path, 'name': Path(path).name.removesuffix('.txt.gz')}
+                     for path in files]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps({'include': entries}, separators=(',', ':')) + '\n')
+          print(f'{len(entries)} source archives from {repo}')
+          PY
+
+  export:
+    needs: plan
+    name: Export ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      SOURCE_REPO: ${{ inputs.repo_id || 'ffatty/plain-text-wikipedia-simpleenglish' }}
+      SOURCE_ARCHIVE: ${{ matrix.archive }}
+      EXPORT_FORMAT: ${{ github.event_name == 'push' && 'both' || inputs.format }}
+      FTS: ${{ github.event_name == 'push' || inputs.fts }}
+      PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install pyarrow zstandard huggingface_hub
+      - name: Download existing plaintext archive
+        run: |
+          python - <<'PY'
+          import os
+          from huggingface_hub import hf_hub_download
+          path = hf_hub_download(
+              repo_id=os.environ['SOURCE_REPO'], filename=os.environ['SOURCE_ARCHIVE'],
+              repo_type='dataset', token=os.getenv('HF_TOKEN') or None, local_dir='source')
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              out.write('SOURCE_PATH=' + path + '\n')
+          PY
+      - name: Stream conversion and validate formats
+        shell: bash
+        run: |
+          set -euo pipefail
+          opts=(--format "$EXPORT_FORMAT")
+          if [[ "$FTS" == true && "$EXPORT_FORMAT" != parquet ]]; then opts+=(--fts); fi
+          python scripts/structured_export.py "$SOURCE_PATH" build/structured "${opts[@]}"
+      - name: Upload added files to existing HF dataset
+        if: env.PUBLISH == 'true'
+        run: |
+          test -n "$HF_TOKEN" || { echo '::error::HF_TOKEN is missing'; exit 1; }
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ['HF_TOKEN'])
+          repo = os.environ['SOURCE_REPO']
+          api.upload_folder(repo_id=repo, repo_type='dataset',
+                            folder_path='build/structured', path_in_repo='structured',
+                            commit_message=f"Structured export: {os.environ['SOURCE_ARCHIVE']}")
+          remote = set(api.list_repo_files(repo, repo_type='dataset'))
+          local = {'structured/' + p.relative_to('build/structured').as_posix()
+                   for p in Path('build/structured').rglob('*') if p.is_file()}
+          if not local.issubset(remote):
+              raise RuntimeError(f'Missing published files: {sorted(local - remote)}')
+          print(f'Published {len(local)} files into {repo}')
+          PY
+      - name: Retain outputs from build-only manual runs
+        if: env.PUBLISH != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: structured-${{ matrix.name }}
+          path: build/structured
+          retention-days: 3
+      - name: Free runner disk
+        if: always()
+        run: rm -rf source build
