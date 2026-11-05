@@ -259,9 +259,11 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
         if name not in wanted:
             remove_old(file)
 
-    def upload_verified(file: Path, timeout: int):
-        with file.open("rb") as stream:
-            md5 = hashlib.file_digest(stream, "md5").hexdigest()
+    def upload_verified(file: Path, timeout: int, known_md5: str | None = None):
+        md5 = known_md5
+        if md5 is None:
+            with file.open("rb") as stream:
+                md5 = hashlib.file_digest(stream, "md5").hexdigest()
         prior_file = old_files.get(file.name)
         if prior_file:
             if remote_matches(file.name, file.stat().st_size, md5):
@@ -288,7 +290,7 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
                 print(f"REUSED Zenodo draft from manifest: {asset.path}", flush=True)
                 continue
             source = fetch_verified(api, repo, asset)
-            upload_verified(source, 7200)
+            upload_verified(source, 7200, asset.md5)
             print(f"Processed {index}/{len(assets)}: {asset.path}", flush=True)
         upload_verified(info, 300)
     published = requests.post(publish_url, headers=headers, timeout=90)
