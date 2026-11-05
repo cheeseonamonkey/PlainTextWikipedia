@@ -12,8 +12,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -70,8 +68,11 @@ def current_manifest(api, repo: str, name: str, kind: str,
         found = json.loads(Path(hf_hub_download(
             repo, filename=path, repo_type="dataset", token=api.token)).read_text())
         record = found["artifacts"][kind]
+        artifact = remote.get(f"structured/{record['path']}")
+        artifact_sha = source_hash(artifact) if artifact is not None else None
         return (found["source_sha256"] == source_digest
-                and f"structured/{record['path']}" in remote
+                and artifact is not None
+                and (artifact_sha is None or artifact_sha == record["sha256"])
                 and (kind != "sqlite" or "fts5" in record))
     except (OSError, KeyError, ValueError, TypeError):
         return False
