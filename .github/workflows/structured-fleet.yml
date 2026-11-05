@@ -1,0 +1,130 @@
+name: Rebuild structured editions across all published Wikipedias
+
+on:
+  workflow_dispatch:
+    inputs:
+      format:
+        description: Formats for every published Wikipedia dataset
+        required: true
+        type: choice
+        default: both
+        options: [parquet, sqlite, both]
+      mirror_kaggle:
+        description: Update existing Kaggle datasets when safe
+        type: boolean
+        default: true
+      kaggle_stage_mb:
+        description: Max compressed data (MiB) per Kaggle runner
+        type: number
+        default: 2500
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/structured-fleet.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wikipedia-structured-all
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install huggingface_hub
+      - id: discover
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python scripts/structured_fleet.py plan
+
+  kaggle-auth:
+    name: Preflight Kaggle CLI once, before any Kaggle download
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      WANT_KAGGLE: ${{ github.event_name == 'push' || inputs.mirror_kaggle }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install kaggle
+      - id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$WANT_KAGGLE" != "true" || -z "$KAGGLE_TOKEN" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Kaggle mirror disabled or credential missing"
+          elif python scripts/kaggle_auth.py --owner ffatty; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Kaggle CLI authenticated; mirrors will be permitted."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Kaggle CLI auth rejected. HF exports continue. Update KAGGLE_TOKEN."
+          fi
+
+  export:
+    name: HF ${{ matrix.repo }}
+    needs: plan
+    if: needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      REPO: ${{ matrix.repo }}
+      FORMAT: ${{ github.event_name == 'push' && 'both' || inputs.format }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install huggingface_hub pyarrow zstandard
+      - name: Reuse current structured files; convert only missing or stale archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/structured_fleet.py build \
+            --repo "$REPO" --format "$FORMAT" --fts-max-mb 100
+
+  kaggle:
+    name: Kaggle version ${{ matrix.repo }}
+    needs: [plan, kaggle-auth, export]
+    if: ${{ always() && needs.plan.result == 'success' && needs.kaggle-auth.outputs.enabled == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      REPO: ${{ matrix.repo }}
+      MAX_MB: ${{ github.event_name == 'push' && '2500' || inputs.kaggle_stage_mb }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install huggingface_hub kaggle
+      - name: Authenticate with Kaggle CLI and persist its proven mode
+        run: python scripts/kaggle_auth.py --owner ffatty
+      - name: Preserve all existing Kaggle files, then publish a verified new version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/structured_kaggle.py --repo "$REPO" --max-mb "$MAX_MB"
