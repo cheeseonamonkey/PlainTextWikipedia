@@ -104,8 +104,9 @@ def current_manifest(api, repo: str, name: str, kind: str,
                 and (artifact_sha is None or artifact_sha == record["sha256"])
                 and (not require_fts or record.get("fts5") is True))
     except (OSError, KeyError, ValueError, TypeError) as exc:
-        if transient_error(exc):
-            raise  # Do not treat a transient failure as a missing export.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if transient_error(exc) or status in (401, 403):
+            raise  # Network or permissions issue, not stale data.
         return False
 
 
