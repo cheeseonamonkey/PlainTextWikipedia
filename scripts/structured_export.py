@@ -31,6 +31,16 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def artifact_hashes(path: Path) -> dict[str, str]:
+    """Compute SHA256 provenance and Zenodo's MD5 identity in one disk pass."""
+    sha, md5 = hashlib.sha256(), hashlib.md5(usedforsecurity=False)
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+            sha.update(block)
+            md5.update(block)
+    return {"sha256": sha.hexdigest(), "md5": md5.hexdigest()}
+
+
 def batches(source: Path, size: int, max_bytes: int = 32 * 1024 * 1024):
     """Bound both rows and decoded article bytes to avoid large-shard OOMs."""
     batch, batch_bytes = [], 0
@@ -162,7 +172,7 @@ def export(source: Path, destination: Path, format: str = "parquet",
             artifacts["parquet"] = {
                 "path": f"parquet/{parquet_path.name}",
                 "size_bytes": parquet_path.stat().st_size,
-                "sha256": sha256(parquet_path),
+                **artifact_hashes(parquet_path),
             }
         if want_sqlite:
             import zstandard as zstd
