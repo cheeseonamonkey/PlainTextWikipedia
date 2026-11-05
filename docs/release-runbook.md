@@ -29,32 +29,53 @@ as the current client can import `six` without bringing that package in.
 
 ## Then: the multilingual batch
 
-GitHub Actions → **Rebuild structured editions across all published Wikipedias**.
+GitHub Actions → **Publish all Wikipedia editions (original + Parquet)**.
 
-Defaults: **publish all three destinations**, original gzip + Parquet on HF/Kaggle and Parquet only on Zenodo, maximum **5000 MiB**
-compressed staging per Kaggle dataset. The workflow discovers existing published
-HF language repositories; each language runs in an independent matrix job
-(`max-parallel: 3`). Within a language:
+Defaults: **publish all three destinations**, original gzip + Parquet on HF/Kaggle,
+Parquet only on Zenodo, **8 concurrent languages**, and **automatic staging limits**
+based on available runner disk (no arbitrary 5 GiB cap).
 
-1. Inspect source LFS hashes and existing format manifests.
-2. Skip current, checksum-matched formats; regenerate only stale/missing formats.
-3. Publish structured artifacts first, provenance manifests last, without touching
-   existing raw source files.
-4. After verifying all three publisher credentials before conversion, stage **the entire existing Kaggle version**
-   before adding the verified formats. Skip an unchanged version entirely.
-5. Publish or version the matching Zenodo DOI automatically, with Parquet only.
-6. **Fail visibly** if a required Kaggle update exceeds the staging budget,
-   runner disk or file count; HF and Zenodo publishing remain independent.
-   No 'successful' three-destination release can hide skipped uploads.
+The controller discovers existing Hugging Face language repositories, checks
+the publisher credentials **once**, then calls the same reusable per-language
+workflow available from **Publish one Wikipedia dataset**. GitHub queues the
+remaining matrix jobs; no separate workflow-dispatch events or artifact handoffs.
+Use `parallelism` (1–12) to tune concurrency, or `languages` (comma-separated
+existing dataset IDs or slugs) to retry only failed editions.
+
+The cheap Simple English edition runs first as a smoke check, followed by the
+largest likely editions to avoid a long trailing job. Actual runtime depends
+on Wiki shard sizes, host rate limits, runner capacity and upload speeds.
+
+Within each language:
+
+1. Compare source LFS digests with published Parquet manifests; skip current shards.
+2. Stream outdated gzip shards into larger Parquet row groups using faster
+   Zstandard compression. Avoid a duplicate full-source checksum pass.
+3. **Atomically commit** Parquet and its SHA256 provenance manifest on HF;
+   retain the original plaintext files.
+4. Check Kaggle's small remote manifest and filename inventory **before**
+   downloading any full dataset. Skip unchanged versions. Otherwise stage
+   all existing files, remove obsolete SQLite and publish a coherent new version.
+5. Automatically publish or version the matching Zenodo DOI (Parquet only).
+   An unchanged verified release skips re-uploading.
+6. **Fail visibly** on required Kaggle disk/file/remote failures, while allowing
+   HF and Zenodo to finish. Each language reports the outcome for all three.
 
 **Large languages:** Kaggle full-version uploads can exceed a standard Actions
-runner's disk. A safe Kaggle skip is expected, not a false success or an
-invitation to discard raw files. A larger runner or separate external worker is
-needed for releases above the configured staging budget.
+runner's disk. Large editions fail explicitly when staging would exhaust actual runner
+disk. A larger runner or external worker may be needed; raw files are never
+discarded to fake a successful Kaggle version.
 
-**Reruns:** Manifests preserve source SHA256 and each artifact's SHA256. A rerun
-can skip successful formats. Single-language jobs can be retried without
-rebuilding the entire corpus, provided source archives have not changed.
+**Reruns:** Source/artifact SHA256 manifests allow successful HF shards,
+unchanged Kaggle datasets, and unchanged Zenodo records to skip redundant work.
+Use `languages` to retry only failures (e.g. `english,serbo-croatian`).
+Only temporary network errors are retried with exponential backoff and jitter;
+authentication and bad-source errors fail immediately.
+
+**Capacity:** GitHub's matrix limit is **256 language jobs per run**. The
+current fleet fits under that limit. A future larger fleet requires sharding
+the controller into multiple batches; discovery fails explicitly rather than
+silently dropping language editions.
 
 ## Representation policy
 
@@ -93,8 +114,8 @@ Zenodo publication is immutable and DOI minting cannot be undone.
 | November 5: regression suite could not start Kaggle CLI | Missing `six` (undeclared/transitively missing dependency); install explicitly. |
 
 The scheduled raw refresh workflows **defer Kaggle versioning** when existing
-structured files would become stale. Run the fleet to regenerate the structured
-formats, then version a coherent Kaggle dataset.
+structured files would become stale. Run the fleet to refresh the missing Parquet outputs, then version a
+coherent Kaggle dataset.
 
 ## Data contract
 
@@ -129,7 +150,7 @@ artifacts. Temporary files are also scoped to per-shard directories and
 removed on exit. Historical usage may take time to update in GitHub billing.
 
 On the standard runner, Kaggle may exceed disk capacity for the largest
-editions. A size/disk preflight now reports this as a **failed Kaggle release**;
-not an invisible skip. Set `kaggle_stage_mb` appropriately on a runner with
-sufficient capacity. Large editions still require a larger runner or another
+editions. A dynamic disk-space preflight reports this as a **failed Kaggle
+release**, not an invisible skip. Set `kaggle_stage_mb` above zero only when
+you intentionally want a stricter cap. Large editions still require a larger runner or another
 execution environment—this is distinct from the Actions artifact quota.

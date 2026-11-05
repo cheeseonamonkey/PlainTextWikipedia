@@ -82,7 +82,7 @@ def finish_sqlite(db: sqlite3.Connection, count: int, fts: bool) -> None:
 
 
 def export(source: Path, destination: Path, format: str = "parquet",
-           fts: bool = False, batch_size: int = 8192) -> dict:
+           fts: bool = False, batch_size: int = 16384) -> dict:
     if not source.is_file() or not source.name.endswith(".txt.gz"):
         raise ValueError("Source must be an existing *.txt.gz article archive")
     if format not in ("parquet", "sqlite", "both"):
@@ -116,7 +116,7 @@ def export(source: Path, destination: Path, format: str = "parquet",
                     pa.field("source_ordinal", pa.int64(), nullable=False),
                 ]).with_metadata({b"source_archive": source.name.encode("utf-8")})
                 writer = pq.ParquetWriter(
-                    parquet_path, schema, compression="zstd", compression_level=5,
+                    parquet_path, schema, compression="zstd", compression_level=3,
                     use_dictionary=["source_file"],
                     write_statistics=["title", "source_ordinal"],
                 )
@@ -211,7 +211,7 @@ def main() -> None:
     parser.add_argument("destination", type=Path)
     parser.add_argument("--format", choices=("parquet", "sqlite", "both"), default="parquet")
     parser.add_argument("--fts", action="store_true", help="Build optional SQLite FTS5 index")
-    parser.add_argument("--batch-size", type=int, default=8192)
+    parser.add_argument("--batch-size", type=int, default=16384)
     args = parser.parse_args()
     result = export(args.source, args.destination, args.format, args.fts, args.batch_size)
     print(json.dumps(result, ensure_ascii=False, indent=2))

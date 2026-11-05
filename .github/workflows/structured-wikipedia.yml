@@ -9,7 +9,7 @@ on:
         type: string
         default: ffatty/plain-text-wikipedia-simpleenglish
       mirror_kaggle:
-        description: Publish the existing Kaggle dataset version
+        description: Publish current version to Kaggle
         type: boolean
         default: true
       publish_zenodo:
@@ -17,21 +17,46 @@ on:
         type: boolean
         default: true
       kaggle_stage_mb:
-        description: Kaggle staging limit (MiB)
+        description: Kaggle staging cap in MiB (0 = automatic runner disk preflight)
+        type: number
+        default: 0
+  workflow_call:
+    inputs:
+      repo_id:
+        required: true
+        type: string
+      mirror_kaggle:
+        type: boolean
+        default: true
+      publish_zenodo:
+        type: boolean
+        default: true
+      kaggle_stage_mb:
         type: number
         default: 5000
+      skip_preflight:
+        description: Only set after the fleet controller has checked all enabled publishers
+        type: boolean
+        default: false
+    secrets:
+      HF_TOKEN:
+        required: true
+      KAGGLE_TOKEN:
+        required: false
+      ZENODO_TOKEN:
+        required: false
 
 permissions:
   contents: read
 
-concurrency:
-  group: wiki-parquet-${{ inputs.repo_id }}
-  cancel-in-progress: false
-
 jobs:
   publish:
+    name: ${{ inputs.repo_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    concurrency:
+      group: wiki-parquet-${{ inputs.repo_id }}
+      cancel-in-progress: false
     env:
       REPO: ${{ inputs.repo_id }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -40,56 +65,45 @@ jobs:
       WANT_KAGGLE: ${{ inputs.mirror_kaggle }}
       WANT_ZENODO: ${{ inputs.publish_zenodo }}
       MAX_MB: ${{ inputs.kaggle_stage_mb }}
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - run: python -m pip install huggingface_hub pyarrow requests kaggle six
-      - name: Check enabled publishers before downloading large archives
+          python-version: "3.12"
+      - name: Install publisher dependencies
+        run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub pyarrow requests kaggle six
+      - name: Authenticate enabled publishers before expensive downloads
+        if: ${{ !inputs.skip_preflight }}
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import os
-          import requests
-          from huggingface_hub import HfApi
-          e = os.environ
-          if not e.get("HF_TOKEN"):
-              raise SystemExit("::error::HF_TOKEN is missing")
-          HfApi(token=e["HF_TOKEN"]).whoami()
-          if e["WANT_ZENODO"] == "true":
-              if not e.get("ZENODO_TOKEN"):
-                  raise SystemExit("::error::ZENODO_TOKEN is missing")
-              response = requests.get(
-                  "https://zenodo.org/api/deposit/depositions",
-                  params={"size": 1},
-                  headers={"Authorization": "Bearer " + e["ZENODO_TOKEN"]}, timeout=30)
-              response.raise_for_status()
-          PY
-          if [[ "$WANT_KAGGLE" == true ]]; then
-            python scripts/kaggle_auth.py --owner ffatty
-          fi
+          args=()
+          [[ "$WANT_KAGGLE" == true ]] || args+=(--no-kaggle)
+          [[ "$WANT_ZENODO" == true ]] || args+=(--no-zenodo)
+          python scripts/publish_preflight.py "${args[@]}"
 
-      - name: Build missing Parquet and publish to the existing Hugging Face dataset
+      - name: Build only missing Parquet; publish to existing Hugging Face dataset
         id: hf
         run: python scripts/structured_fleet.py build --repo "$REPO"
 
-      - name: Publish original + Parquet to existing Kaggle dataset
+      - name: Publish original + Parquet into existing Kaggle dataset
         if: ${{ steps.hf.outcome == 'success' && inputs.mirror_kaggle }}
         id: kaggle
         continue-on-error: true
+        shell: bash
         run: |
+          set -euo pipefail
           python scripts/kaggle_auth.py --owner ffatty
           python scripts/structured_kaggle.py --repo "$REPO" --max-mb "$MAX_MB" --require-publish
 
-      - name: Publish verified Parquet to Zenodo
+      - name: Publish or version verified Parquet DOI on Zenodo
         if: ${{ steps.hf.outcome == 'success' && inputs.publish_zenodo }}
         id: zenodo
         continue-on-error: true
         run: python scripts/release_parquet.py --repo "$REPO" --publish
 
-      - name: Report all enabled publishing outcomes
+      - name: Summarize all enabled destinations; fail explicitly on partial release
         if: always()
         shell: bash
         env:
@@ -97,9 +111,15 @@ jobs:
           KAGGLE_STATUS: ${{ steps.kaggle.outcome }}
           ZENODO_STATUS: ${{ steps.zenodo.outcome }}
         run: |
-          echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
-          echo "HF=$HF_STATUS Kaggle=$KAGGLE_STATUS Zenodo=$ZENODO_STATUS" \
-            | tee -a "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          {
+            echo "### $REPO"
+            echo "| Destination | Result |"
+            echo "|---|---|"
+            echo "| Hugging Face | $HF_STATUS |"
+            echo "| Kaggle | $KAGGLE_STATUS |"
+            echo "| Zenodo | $ZENODO_STATUS |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           [[ "$HF_STATUS" == success ]] || exit 1
           [[ "$WANT_KAGGLE" != true || "$KAGGLE_STATUS" == success ]] || exit 1
           [[ "$WANT_ZENODO" != true || "$ZENODO_STATUS" == success ]] || exit 1

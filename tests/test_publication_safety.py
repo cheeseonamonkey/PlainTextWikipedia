@@ -188,6 +188,8 @@ class TestParquetOnlyPublishing(unittest.TestCase):
             def runner(*args, check=True):
                 if args[0] == "status":
                     return SimpleNamespace(returncode=0, stdout='{"status":"ready"}')
+                if args[0] == "files":
+                    return SimpleNamespace(returncode=1, stdout="")
                 if args[0] == "download":
                     stage = Path(args[args.index("-p") + 1])
                     (stage / raw_name).write_bytes(raw.read_bytes())
@@ -231,21 +233,100 @@ class TestParquetOnlyPublishing(unittest.TestCase):
                                      lfs={"sha256": digest}, size=raw.stat().st_size)
             uploaded = []
 
-            def upload_file(*, path_in_repo, path_or_fileobj, **kwargs):
-                file = Path(path_or_fileobj)
-                self.assertTrue(file.is_file())
-                uploaded.append(path_in_repo)
+            def create_commit(*, operations, **kwargs):
+                self.assertEqual(len(operations), 2)
+                for operation in operations:
+                    self.assertTrue(Path(operation.path_or_fileobj).is_file())
+                    uploaded.append(operation.path_in_repo)
 
             with (patch.dict(os.environ, {"HF_TOKEN": "test-token"}),
                   patch("scripts.structured_fleet.HfApi") as api,
                   patch("scripts.structured_fleet.hf_hub_download", return_value=str(raw))):
                 api.return_value.list_repo_tree.return_value = [source]
-                api.return_value.upload_file.side_effect = upload_file
+                api.return_value.create_commit.side_effect = create_commit
                 build(repo)
+                api.return_value.create_commit.assert_called_once()
+                api.return_value.upload_file.assert_not_called()
             self.assertEqual(sorted(uploaded), [
                 f"structured/manifests/{name}.parquet.json",
                 f"structured/parquet/{name}.parquet",
             ])
+
+
+class TestFleetPlanningAndKaggleProbe(unittest.TestCase):
+    def test_language_selection_and_longest_jobs_first(self):
+        from scripts.structured_fleet import SIMPLE, select_repos
+
+        repos = [
+            "ffatty/plaintext-wikipedia-full-yoruba",
+            "ffatty/plaintext-wikipedia-full-german",
+            SIMPLE,
+            "ffatty/plaintext-wikipedia-full-english",
+            "ffatty/plaintext-wikipedia-full-serbo-croatian",
+        ]
+        self.assertEqual(select_repos(repos), [
+            SIMPLE,
+            "ffatty/plaintext-wikipedia-full-english",
+            "ffatty/plaintext-wikipedia-full-german",
+            "ffatty/plaintext-wikipedia-full-serbo-croatian",
+            "ffatty/plaintext-wikipedia-full-yoruba",
+        ])
+        self.assertEqual(select_repos(repos, "serbo-croatian,english"), [
+            "ffatty/plaintext-wikipedia-full-english",
+            "ffatty/plaintext-wikipedia-full-serbo-croatian",
+        ])
+        with self.assertRaisesRegex(ValueError, "Unknown/unpublished"):
+            select_repos(repos, "not-an-edition")
+
+    def test_kaggle_remote_fast_path_downloads_manifest_only(self):
+        from scripts.structured_kaggle import remote_is_current
+
+        provenance = {"version": 1, "archives": [{"articles": 3}]}
+        planned = [
+            ("data/simplewiki.txt.gz", "a" * 64, None),
+            ("structured/parquet/simplewiki.parquet", "b" * 64, 123),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            commands = []
+
+            def fake_run(*args, check=True):
+                commands.append(args)
+                if args[0] == "files":
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout="name,size\nsimplewiki.txt.gz,222\nsimplewiki.parquet,123\nstructured-manifest.json,500\n",
+                    )
+                if args[0] == "download":
+                    self.assertIn("-f", args)
+                    probe = Path(args[args.index("-p") + 1])
+                    (probe / "structured-manifest.json").write_text(json.dumps(provenance))
+                    return SimpleNamespace(returncode=0, stdout="")
+                raise AssertionError(args)
+
+            with patch("scripts.structured_kaggle.run", side_effect=fake_run):
+                self.assertTrue(remote_is_current("ffatty/wiki", provenance, planned, Path(folder)))
+                self.assertEqual([cmd[0] for cmd in commands], ["files", "download"])
+                self.assertFalse(remote_is_current("ffatty/wiki", {"version": 2},
+                                                   planned, Path(folder)))
+
+    def test_kaggle_fast_path_does_not_ignore_obsolete_sqlite(self):
+        from scripts.structured_kaggle import remote_is_current
+
+        def fake_run(*args, check=True):
+            if args[0] == "files":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="name\nsource.txt.gz\nsource.parquet\nstructured-manifest.json\nold.sqlite.zst\n",
+                )
+            raise AssertionError("Must not download any remote files")
+
+        with tempfile.TemporaryDirectory() as folder:
+            with patch("scripts.structured_kaggle.run", side_effect=fake_run):
+                self.assertFalse(remote_is_current(
+                    "ffatty/wiki", {"version": 1}, [
+                        ("data/source.txt.gz", "a" * 64, None),
+                        ("structured/parquet/source.parquet", "b" * 64, 123),
+                    ], Path(folder)))
 
 
 class TestCIContracts(unittest.TestCase):
@@ -273,10 +354,17 @@ class TestCIContracts(unittest.TestCase):
             self.assertNotIn("sqlite", workflow_text.lower())
             self.assertNotIn("upload-artifact", workflow_text)
             single = yaml.load(workflow_text, Loader=yaml.BaseLoader)
-            self.assertEqual(set(single["on"]), {"workflow_dispatch"})
+            self.assertEqual(set(single["on"]),
+                             {"workflow_dispatch", "workflow_call"} if name == "structured-wikipedia.yml"
+                             else {"workflow_dispatch"})
             if name == "structured-wikipedia.yml":
                 self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["mirror_kaggle"]["default"], "true")
                 self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["publish_zenodo"]["default"], "true")
+        fleet_job = fleet["jobs"]["publish"]
+        self.assertEqual(fleet_job["uses"], "./.github/workflows/structured-wikipedia.yml")
+        self.assertEqual(fleet_job["secrets"], "inherit")
+        self.assertEqual(fleet_job["strategy"]["fail-fast"], "false")
+        self.assertEqual(fleet["on"]["workflow_dispatch"]["inputs"]["parallelism"]["default"], "8")
         self.assertIn("--publish", (root / "zenodo-parquet.yml").read_text())
 
     def test_cli_entrypoints_import_without_scripts_package_errors(self):

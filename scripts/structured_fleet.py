@@ -11,12 +11,14 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import tempfile
 import time
+import urllib.error
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
 try:
     from scripts.structured_export import export
@@ -48,15 +50,36 @@ def source_hash(info) -> str | None:
     return getattr(lfs, "sha256", None)
 
 
+def transient_error(exc: Exception) -> bool:
+    """Retry throttling/transport failures, never permissions or bad manifests."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is not None:
+        return status in (408, 409, 425, 429) or 500 <= status < 600
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (408, 409, 425, 429) or 500 <= exc.code < 600
+    if isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError)):
+        return True
+    try:
+        import httpx
+        import requests
+        return isinstance(exc, (httpx.TransportError, requests.exceptions.ConnectionError,
+                                requests.exceptions.Timeout))
+    except ImportError:
+        return False
+
+
 def retry(label, callback, attempts=4):
     for n in range(attempts):
         try:
             return callback()
         except Exception as exc:
-            if n == attempts - 1:
+            if n == attempts - 1 or not transient_error(exc):
                 raise
-            print(f"Retrying {label} after transient error ({type(exc).__name__})", flush=True)
-            time.sleep(min(80, 8 * 2 ** n))
+            delay = min(80, 8 * 2 ** n) + random.random() * 3
+            print(f"Retrying transient {label} ({type(exc).__name__}, "
+                  f"attempt {n + 2}/{attempts})", flush=True)
+            time.sleep(delay)
 
 
 def current_manifest(api, repo: str, name: str, kind: str,
@@ -89,17 +112,46 @@ def available_repos(api: HfApi):
     return repos
 
 
-def plan() -> None:
+# Start the expensive editions early to avoid a several-hour tail when
+# smaller matrix jobs finish. Simple English is a cheap initial smoke check.
+LARGE_LANGUAGES = (
+    "english", "german", "french", "japanese", "spanish",
+    "russian", "chinese", "portuguese", "italian", "arabic",
+)
+SIMPLE = "ffatty/plain-text-wikipedia-simpleenglish"
+
+
+def select_repos(repos: list[str], only: str = "") -> list[str]:
+    if only.strip():
+        requested = {word.strip().lower() for word in only.split(",") if word.strip()}
+        names = {repo: repo.rsplit("/", 1)[-1].removeprefix("plaintext-wikipedia-full-")
+                 for repo in repos}
+        matches = [repo for repo in repos
+                   if repo.lower() in requested or names[repo] in requested
+                   or (repo == SIMPLE and "simpleenglish" in requested)]
+        unknown = requested - {value for repo in matches for value in
+                               (repo.lower(), names[repo])} - (
+                                   {"simpleenglish"} if SIMPLE in matches else set())
+        if unknown:
+            raise ValueError(f"Unknown/unpublished Wikipedia datasets: {', '.join(sorted(unknown))}")
+        repos = matches
+    priority = {name: index for index, name in enumerate(LARGE_LANGUAGES)}
+    return sorted(repos, key=lambda repo: (
+        -1 if repo == SIMPLE else priority.get(
+            repo.rsplit("/", 1)[-1].removeprefix("plaintext-wikipedia-full-"), 100),
+        repo,
+    ))
+
+
+def plan(only: str = "") -> None:
     api = HfApi(token=os.getenv("HF_TOKEN") or None)
-    repos = available_repos(api)
-    # Smaller, short names come first; builds remain independent.
-    repos.sort(key=lambda x: (x != "ffatty/plain-text-wikipedia-simpleenglish", x))
-    matrix = {"include": [{"repo": x} for x in repos]}
+    repos = select_repos(available_repos(api), only)
+    matrix = {"include": [{"repo": repo} for repo in repos]}
     output = json.dumps(matrix, separators=(",", ":"))
     if out := os.getenv("GITHUB_OUTPUT"):
         with open(out, "a", encoding="utf-8") as stream:
-            stream.write(f"matrix={output}\n")
-    print(f"Discovered {len(repos)} EXISTING Wikipedia datasets; no new slugs created")
+            stream.write(f"matrix={output}\ntotal={len(repos)}\n")
+    print(f"Queued {len(repos)} EXISTING Wikipedia datasets; no new slugs created")
     for repo in repos:
         print(repo)
 
@@ -113,8 +165,7 @@ def build(repo: str) -> None:
     api = HfApi(token=token)
     sources, remote = retry("list existing HF files", lambda: source_files(api, repo))
     if not sources:
-        print(f"::warning::No source text archives in {repo}; skipping", flush=True)
-        return
+        raise RuntimeError(f"No source text archives in {repo}; nothing can be published")
     failures = []
     updated = skipped = 0
     for path, info in sorted(sources.items()):
@@ -133,34 +184,37 @@ def build(repo: str) -> None:
                 source = Path(retry("download source", lambda: hf_hub_download(
                     repo, filename=path, repo_type="dataset", token=token,
                     local_dir=working / "source")))
-                digest_actual = sha256(source)
-                if digest and digest != digest_actual:
-                    raise ValueError(f"Source LFS SHA256 mismatch: {path}")
-                if is_current(digest_actual):
-                    skipped += 1
-                    print(f"SKIP already-current {repo}/{name}", flush=True)
-                    continue
+                # The exporter checksums the compressed source already; avoid
+                # another full-file scan before decompression.
+                if not digest:
+                    digest = sha256(source)
+                    if is_current(digest):
+                        skipped += 1
+                        print(f"SKIP already-current {repo}/{name}", flush=True)
+                        continue
                 result = export(source, working / "output", "parquet")
-                if result["source_sha256"] != digest_actual:
-                    raise ValueError("Export provenance differs from downloaded source")
+                if result["source_sha256"] != digest:
+                    raise ValueError(f"Source LFS SHA256 mismatch: {path}")
 
-                # Publish data first, manifests last; no source files are modified.
-                for kind, artifact in result["artifacts"].items():
-                    location = f"structured/{artifact['path']}"
-                    file = working / "output" / artifact["path"]
-                    retry(f"upload {location}", lambda file=file, location=location:
-                          api.upload_file(repo_id=repo, repo_type="dataset",
-                                          path_or_fileobj=str(file),
-                                          path_in_repo=location,
-                                          commit_message=f"Structured {kind}: {name}"))
-                for kind in result["artifacts"]:
-                    filename = f"{name}.{kind}.json"
-                    retry(f"publish manifest {filename}", lambda filename=filename:
-                          api.upload_file(
-                              repo_id=repo, repo_type="dataset",
-                              path_or_fileobj=str(working / "output" / "manifests" / filename),
-                              path_in_repo=f"structured/manifests/{filename}",
-                              commit_message=f"Verify {kind} source {name}"))
+                # One atomic HF commit per shard: no half-published Parquet
+                # without the matching checksum manifest, and one fewer API commit.
+                artifact = result["artifacts"]["parquet"]
+                parquet_file = working / "output" / artifact["path"]
+                manifest_file = working / "output" / "manifests" / f"{name}.parquet.json"
+                operations = [
+                    CommitOperationAdd(
+                        path_in_repo=f"structured/{artifact['path']}",
+                        path_or_fileobj=str(parquet_file),
+                    ),
+                    CommitOperationAdd(
+                        path_in_repo=f"structured/manifests/{name}.parquet.json",
+                        path_or_fileobj=str(manifest_file),
+                    ),
+                ]
+                retry(f"commit Parquet + provenance {name}", lambda:
+                      api.create_commit(repo_id=repo, repo_type="dataset",
+                                        operations=operations,
+                                        commit_message=f"Verified Parquet: {name}"))
                 updated += 1
                 print(f"UPDATED {repo}/{name}: {result['articles']} articles, "
                       f"Parquet", flush=True)
@@ -184,12 +238,14 @@ def build(repo: str) -> None:
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("plan")
+    selector = sub.add_parser("plan")
+    selector.add_argument("--only", default="",
+                          help="Comma-separated existing dataset IDs or language slugs")
     b = sub.add_parser("build")
     b.add_argument("--repo", required=True)
     args = p.parse_args()
     if args.command == "plan":
-        plan()
+        plan(args.only)
     else:
         build(args.repo)
 
