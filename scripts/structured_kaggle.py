@@ -96,8 +96,8 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
 
     if not re.fullmatch(r"ffatty/(?:plain-text-wikipedia-simpleenglish|plaintext-wikipedia-full-[a-z0-9-]+)", repo):
         raise ValueError("Unsupported Wikipedia repo")
-    if max_mb < 300:
-        raise ValueError("max-mb must be >=300")
+    if max_mb < 0 or 0 < max_mb < 300:
+        raise ValueError("max-mb must be 0 (automatic) or >=300")
     api = HfApi(token=os.getenv("HF_TOKEN") or None)
     files = {x.path: x for x in api.list_repo_tree(repo, repo_type="dataset", recursive=True)}
     sources = {p: x for p, x in files.items() if p.startswith("data/") and p.endswith(".txt.gz")}
@@ -163,7 +163,7 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
         skip(f"{repo}: need ~{(total * 2 + 1_000_000_000)/1e9:.1f} GB "
              f"temporary disk; only {available/1e9:.1f} GB free on runner")
         return
-    if total > max_mb * 1024 * 1024:
+    if max_mb and total > max_mb * 1024 * 1024:
         skip(f"{repo}: {total / 1048576:.0f} MiB exceeds {max_mb} MiB CI staging budget")
         return
 
@@ -295,8 +295,8 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repo", required=True)
-    p.add_argument("--max-mb", type=int, default=2500,
-                   help="Upper bound for compressed source+structured staging")
+    p.add_argument("--max-mb", type=int, default=0,
+                   help="Compressed staging limit in MiB (0 = auto based on free runner disk)")
     p.add_argument("--require-publish", action="store_true",
                    help="Fail rather than silently skip an existing Kaggle dataset")
     args = p.parse_args()
