@@ -134,9 +134,9 @@ class TestPublishByDefault(unittest.TestCase):
                          "notes": "wikidata-parquet-manifest-sha256:" +
                                   provenance_fingerprint(metadata)},
         }
-        with patch.dict(os.environ, {"ZENODO_TOKEN": "test-value"}), \\
-             patch("scripts.release_parquet.list_matching_depositions", return_value=[prior]), \\
-             patch("requests.post") as post:
+        with (patch.dict(os.environ, {"ZENODO_TOKEN": "test-value"}),
+              patch("scripts.release_parquet.list_matching_depositions", return_value=[prior]),
+              patch("requests.post") as post):
             zenodo_publish(SimpleNamespace(token=None), "ffatty/plain-text-wikipedia-simpleenglish",
                            [Asset("a.parquet", "b" * 64, 123)], metadata, None)
             post.assert_not_called()
