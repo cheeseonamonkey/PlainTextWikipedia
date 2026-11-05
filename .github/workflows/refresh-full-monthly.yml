@@ -50,7 +50,7 @@ jobs:
       - name: Install converter dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r REQUIREMENTS.TXT kaggle huggingface_hub
+          python -m pip install -r REQUIREMENTS.TXT kaggle six huggingface_hub
 
       - name: Download page-range files for the shard
         run: |
@@ -69,28 +69,44 @@ jobs:
           gzip -t "$file"
           test "$(gzip -cd "$file" | wc -l)" -gt 0
 
-      - name: Configure Kaggle credentials
-        if: ${{ env.KAGGLE_TOKEN != '' }}
-        run: echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
-
-      - name: Publish the complete version to Kaggle
-        if: ${{ env.KAGGLE_TOKEN != '' }}
+      - name: Publish refreshed shard to Hugging Face first
+        if: ${{ env.HF_TOKEN != '' }}
+        shell: bash
         run: |
+          set -euo pipefail
+          file="enwiki_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
+          hf upload "$FULL_HF_REPO" "output/$file" "data/$file" \
+            --repo-type dataset --token "$HF_TOKEN" \
+            --commit-message "Refresh English Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
+
+      - name: Check Kaggle CLI credentials before downloading its full dataset
+        id: kaggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$KAGGLE_TOKEN" ]] && python scripts/kaggle_auth.py --owner ffatty; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Kaggle not available; Hugging Face refresh remains valid"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish complete existing Kaggle version (never replace with one shard)
+        if: ${{ steps.kaggle.outputs.enabled == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
           mkdir -p current
           kaggle datasets download -d "$FULL_KAGGLE_DATASET" -p current --unzip
           file="enwiki_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
           cp "output/$file" current/
           cp kaggle-metadata-full.json current/dataset-metadata.json
           sed -i "s#ffatty/plaintext-wikipedia-full-english#$FULL_KAGGLE_DATASET#" current/dataset-metadata.json
-          kaggle datasets version -p current             -m "Refresh English Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"             --dir-mode zip
-
-      - name: Publish the changed shard to Hugging Face
-        if: ${{ env.HF_TOKEN != '' }}
-        run: |
-          file="enwiki_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
-          hf upload "$FULL_HF_REPO" "output/$file" "data/$file"             --repo-type dataset --token "$HF_TOKEN"             --commit-message "Refresh English Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))"
+          kaggle datasets version -p current \
+            -m "Refresh English Wikipedia shard $SHARD_NUMBER/$FULL_SHARD_COUNT ($(date -u +%Y-%m-%d))" \
+            --dir-mode zip --keep-tabular
 
       - name: Free runner disk
         if: always()
         run: |
-          rm -rf output
+          rm -rf output current
