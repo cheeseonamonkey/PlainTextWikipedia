@@ -31,7 +31,7 @@ as the current client can import `six` without bringing that package in.
 
 GitHub Actions → **Rebuild structured editions across all published Wikipedias**.
 
-Defaults: **publish all three destinations**, Parquet + SQLite on HF/Kaggle and Parquet only on Zenodo, maximum **2500 MiB**
+Defaults: **publish all three destinations**, Parquet + SQLite on HF/Kaggle and Parquet only on Zenodo, maximum **5000 MiB**
 compressed staging per Kaggle dataset. The workflow discovers existing published
 HF language repositories; each language runs in an independent matrix job
 (`max-parallel: 3`). Within a language:
