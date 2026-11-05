@@ -6,6 +6,7 @@ No credentials, external HTTP requests, uploads or Zenodo records are used.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,7 @@ from unittest.mock import patch
 import yaml
 
 from scripts.release_parquet import (Asset, dataset_slug, inventory, limits,
-                                    provenance_fingerprint, list_matching_depositions)
+                                    provenance_fingerprint, list_matching_depositions, zenodo_publish)
 from scripts.structured_fleet import current_manifest
 from scripts.structured_kaggle import language_name, mirror
 
@@ -123,6 +124,22 @@ class TestPublishByDefault(unittest.TestCase):
                                             "https://zenodo.org/api/deposit/depositions",
                                             {"Authorization": "fake"}, "target")
         self.assertEqual(matches, [good])
+
+    def test_zenodo_does_not_republish_identical_parquet_record(self):
+        metadata = {"language": "simpleenglish", "source_url": "https://example.org",
+                    "files": [{"source_sha256": "a" * 64}]}
+        prior = {
+            "id": 999, "submitted": True,
+            "metadata": {"title": "Plaintext Wikipedia (simpleenglish) — Parquet edition",
+                         "notes": "wikidata-parquet-manifest-sha256:" +
+                                  provenance_fingerprint(metadata)},
+        }
+        with patch.dict(os.environ, {"ZENODO_TOKEN": "test-value"}), \\
+             patch("scripts.release_parquet.list_matching_depositions", return_value=[prior]), \\
+             patch("requests.post") as post:
+            zenodo_publish(SimpleNamespace(token=None), "ffatty/plain-text-wikipedia-simpleenglish",
+                           [Asset("a.parquet", "b" * 64, 123)], metadata, None)
+            post.assert_not_called()
 
     def test_required_kaggle_cannot_skip_unpublished_dataset(self):
         with patch("scripts.structured_kaggle.HfApi") as api:
