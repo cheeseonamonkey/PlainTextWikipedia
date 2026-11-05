@@ -16,7 +16,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
@@ -41,6 +40,16 @@ def source_hash(item):
     lfs = getattr(item, "lfs", None)
     return (lfs.get("sha256") if isinstance(lfs, dict)
             else getattr(lfs, "sha256", None))
+
+
+def language_name(repo: str) -> str:
+    slug = repo.rsplit("/", 1)[1].removeprefix("plaintext-wikipedia-full-")
+    if slug == "plain-text-wikipedia-simpleenglish":
+        return "Simple English"
+    catalog = Path(__file__).resolve().parents[1] / "config" / "additional-languages.json"
+    entries = json.loads(catalog.read_text(encoding="utf-8"))["languages"]
+    return next((item["name"] for item in entries if item["slug"] == slug),
+                slug.replace("-", " ").title())
 
 
 def mirror(repo: str, max_mb: int):
@@ -115,7 +124,23 @@ def mirror(repo: str, max_mb: int):
             raise RuntimeError("Kaggle dataset download returned zero files")
         if any(p.is_dir() for p in stage.iterdir()):
             raise RuntimeError("Dataset contains directories; cannot safely flatten them")
+        # A repeated CI run should not re-upload an identical Kaggle version.
+        provenance = {"version": 1, "source": f"https://huggingface.co/datasets/{repo}",
+                      "archives": manifests}
+        old_provenance = stage / "structured-manifest.json"
+        if old_provenance.exists():
+            try:
+                if json.loads(old_provenance.read_text()) == provenance:
+                    print(f"SKIP {dataset}: already contains these exact verified exports")
+                    return
+            except (OSError, ValueError):
+                pass
+
         for location, digest, expected_bytes in planned:
+            target = stage / Path(location).name
+            if target.is_file() and (expected_bytes is None
+                    or target.stat().st_size == int(expected_bytes)) and sha256(target) == digest:
+                continue  # Preserve already identical Kaggle files, avoiding HF downloads.
             source = Path(hf_hub_download(repo, filename=location,
                                          repo_type="dataset", token=api.token,
                                          local_dir=root / "hf"))
@@ -123,21 +148,25 @@ def mirror(repo: str, max_mb: int):
                 raise RuntimeError(f"SHA256 mismatch for {location}")
             if expected_bytes is not None and source.stat().st_size != int(expected_bytes):
                 raise RuntimeError(f"Size mismatch for {location}")
-            shutil.copyfile(source, stage / Path(location).name)
-        # Compact deterministic provenance document avoids 16+ extra top-level
-        # files on Kaggle while preserving per-shard SHA256 and counts.
-        (stage / "structured-manifest.json").write_text(
-            json.dumps({"version": 1, "source": f"https://huggingface.co/datasets/{repo}",
-                        "archives": manifests},
-                       ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            target.unlink(missing_ok=True)
+            try:
+                os.link(source, target)  # Same-device hardlink avoids doubling disk I/O.
+            except OSError:
+                shutil.copyfile(source, target)
+
+        # Compact provenance avoids 16+ extra top-level manifest files.
+        old_provenance.write_text(
+            json.dumps(provenance, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8")
         meta = json.loads((Path(__file__).resolve().parents[1] /
                           ("kaggle-metadata.json" if "simpleenglish" in dataset
                            else "kaggle-metadata-full.json")).read_text())
         meta["id"] = dataset
-        name = dataset.rsplit("-", 1)[-1].replace("-", " ").title()
+        name = language_name(repo)
+        meta["title"] = f"Plaintext Wikipedia ({name})"
         if "simpleenglish" not in dataset:
-            meta["title"] = f"Plaintext Wikipedia ({name})"
-            meta["description"] = meta["description"].replace("English Wikipedia", f"{name} Wikipedia")
+            meta["description"] = meta["description"].replace(
+                "English Wikipedia", f"{name} Wikipedia")
         meta["description"] = meta["description"].replace(
             "__REPO_URL__", "https://github.com/cheeseonamonkey/PlainTextWikipedia"
         ).replace("__UPSTREAM_URL__", "https://github.com/daveshap/PlainTextWikipedia")
@@ -155,8 +184,8 @@ def mirror(repo: str, max_mb: int):
         print(f"Preserving {len(old_files)} old file(s); publishing {len(planned)} source "
               f"and structured files to {dataset} ({total / 1048576:.0f} MiB)", flush=True)
         run("version", "-p", str(stage), "-m",
-            "Add verified Parquet and SQLite Wikipedia editions", "--dir-mode", "skip",
-            "--keep-tabular")
+            "Add verified Parquet and SQLite Wikipedia editions",
+            "--dir-mode", "skip", "--keep-tabular")
         print(f"VERSIONED https://www.kaggle.com/datasets/{dataset}")
         if dest := os.getenv("GITHUB_STEP_SUMMARY"):
             with open(dest, "a") as out:
