@@ -36,6 +36,9 @@ class StructuredExportTests(unittest.TestCase):
         self.assertEqual(set(info["artifacts"]), {"parquet", "sqlite"})
 
         parquet = dest / info["artifacts"]["parquet"]["path"]
+        import hashlib
+        self.assertEqual(info["artifacts"]["parquet"]["md5"],
+                         hashlib.md5(parquet.read_bytes(), usedforsecurity=False).hexdigest())
         table = pq.read_table(parquet)
         self.assertEqual(table.num_rows, 3)
         self.assertEqual(table.column("title").to_pylist(), [r[0] for r in self.rows])
