@@ -24,13 +24,17 @@ before claiming full edition coverage.
 ## Publishing
 
 - [Entire language fleet](../.github/workflows/structured-fleet.yml): manually
-  run; **Hugging Face, Kaggle and Zenodo are all enabled by default**.
-- [One language](../.github/workflows/structured-wikipedia.yml): same publish
-  helpers and destinations, scoped to a particular existing dataset.
+  dispatches a single controller which queues reusable language jobs;
+  **Hugging Face, Kaggle and Zenodo are all enabled by default**.
+- [One language](../.github/workflows/structured-wikipedia.yml): **the same
+  reusable workflow** is also directly dispatchable. No duplicated CI code.
+  Retry individual failures with the controller's `languages` input.
 - Hugging Face publishes under the **same dataset ID**, preserving original files.
-- Kaggle versions the **same dataset ID** with original text and Parquet; the
-  previous file set is downloaded first to avoid silently dropping existing
-  public data. Oversized editions fail explicitly instead of discarding files.
+- Kaggle versions the **same dataset ID** with original text and Parquet.
+  Before downloading multi-GB files, it fetches only the tiny remote manifest
+  and checks filenames. When unchanged, nothing is staged or uploaded.
+  Changed editions download the prior complete file set first to avoid
+  silently dropping original data. Oversized editions fail explicitly.
 - Zenodo receives **Parquet only**, plus a provenance manifest.
 
 No workflow creates new SQLite databases or FTS5 indexes. Older SQLite assets remain available on Hugging Face where previously published;
@@ -40,7 +44,10 @@ remain available for download. The low-level
 and test compatibility; release jobs use Parquet only.
 
 No large intermediate GitHub Actions artifacts are uploaded. Export jobs stream
-source shards, publish, and remove temporary runner data.
+source shards, atomically publish each Parquet + source-checksum pair on HF, and
+remove temporary runner data. The controller preflights credentials once and
+queues up to 8 languages concurrently by default (configurable from 1–12).
+GitHub limits matrix job fan-out to 256 per workflow run.
 
 ## Example
 
