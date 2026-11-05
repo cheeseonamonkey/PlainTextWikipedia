@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       languages:
-        description: Optional comma-separated dataset IDs or language slugs (blank = all existing datasets)
+        description: Optional codes, project IDs, slugs, or full dataset IDs (e.g. simple,en; blank = all)
         type: string
         required: false
         default: ""
