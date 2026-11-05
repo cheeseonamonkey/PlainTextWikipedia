@@ -95,4 +95,4 @@ jobs:
           [[ "$ALLOW_LEXICAL" == true ]] && args+=(--allow-lexical-only)
           SECONDS=0
           trap 'echo "- Feature phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
-          python scripts/article_features_release.py "$${args[@]}"
+          python scripts/article_features_release.py "${args[@]}"
