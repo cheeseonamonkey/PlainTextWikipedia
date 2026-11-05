@@ -353,15 +353,20 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
     sparse = sorted((idx, round(value / l2, 7)) for idx, value, _ in weighted) if l2 else []
     semantic = None
     if fasttext_vectors is not None and mass:
-        semantic = np.zeros(FASTTEXT_DIMS, dtype=np.float32)
-        for index, score in vecterms:
-            semantic += fasttext_vectors[index] * (score / l2)
+        indices = np.fromiter((index for index, _ in vecterms),
+                              dtype=np.intp, count=len(vecterms))
+        weights = np.fromiter((score / l2 for _, score in vecterms),
+                              dtype=np.float32, count=len(vecterms))
+        semantic = weights @ fasttext_vectors[indices]
     lexical = lexical_hash(sparse)
     vocab_coverage = sum(known.values()) / total
     tfidf_coverage = sum(counts[t] for _, _, t in weighted) / total
-    top5share = sum(value for _, value, _ in top[:5]) / max(1e-9, sum(v for _, v, _ in weighted))
-    concentration = (sum((v / max(1e-9, sum(x[1] for x in weighted))) ** 2 for _, v, _ in weighted)
-                     if weighted else 0.0)
+    tfidf_sum = sum(v for _, v, _ in weighted)
+    top5share = sum(value for _, value, _ in top[:5]) / max(1e-9, tfidf_sum)
+    concentration = (sum((v / tfidf_sum) ** 2 for _, v, _ in weighted)
+                     if tfidf_sum else 0.0)
+    tfidf_entropy = (-sum((v / tfidf_sum) * math.log(v / tfidf_sum)
+                          for _, v, _ in weighted) if tfidf_sum else 0.0)
     mean_idf = (sum(vocabulary_lookup[t][2] * n for t, n in known.items()) /
                 max(1, sum(known.values())))
     title_overlap = len(title_terms.intersection(known)) / max(1, len(title_terms))
@@ -414,9 +419,7 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
         "vocab_coverage": vocab_coverage, "tfidf_coverage": tfidf_coverage,
         "mean_idf": mean_idf, "max_tfidf": top[0][1] if top else 0,
         "tfidf_l2": l2, "tfidf_top5_share": top5share,
-        "tfidf_entropy": -sum((v / max(1e-9, sum(x[1] for x in weighted))) *
-                              math.log(v / max(1e-9, sum(x[1] for x in weighted)))
-                              for _, v, _ in weighted) if weighted else 0,
+        "tfidf_entropy": tfidf_entropy,
         "bm15_sum": bm_sum, "bm15_max": bmweighted[0][1] if bmweighted else 0.,
         "saliency": saliency, "title_overlap": title_overlap,
         "lead_relevance": lead_relevance, "representative_sentence": representative,
