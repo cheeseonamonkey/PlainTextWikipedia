@@ -115,7 +115,7 @@ def language_stopwords(code: str) -> frozenset[str]:
     except ImportError:
         return frozenset(words)
     iso = "en" if code == "simple" else code.split("_", 1)[0].split("-", 1)[0]
-    words.update(fold(term) for term in stopwords(iso))
+    words.update(fold(term) for term in (stopwords(iso) or ()))
     return frozenset(words)
 
 
