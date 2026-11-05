@@ -1,6 +1,6 @@
 # Per-language article features
 
-A separate, optional enrichment release. Original Wikipedia gzip and structured
+A separate enrichment release, with **all stages enabled by default**. Original Wikipedia gzip and structured
 Parquet outputs remain unchanged. The pipeline derives corpus-wide lexical
 statistics and small semantic vectors from **every available article** in one
 existing language dataset.
@@ -16,18 +16,20 @@ All files are added to the same Hugging Face dataset under features/:
 
 | Filename | Contents |
 |---|---|
-| article-metrics.csv.gz | One CSV row per article; full metric set, sparse lexical vectors and a quantized 200D vector |
+| article-metrics.csv.gz | One CSV row per article; full metric set, sparse lexical vectors, separate 160D fastText + 128D Bekko vectors and a combined 200D vector, all quantized |
 | vocabulary.json.gz | Up to 10,000 corpus terms: ID, total count, document frequency, smoothed IDF and 5K TF-IDF selection flag |
 | articles.sqlite.zst | Compressed SQLite: source article text, full per-article compressed word-count JSON, term totals, vocabulary, article metrics and optional FTS5 index |
-| fasttext.bin.zst | Language-specific fastText CBOW model, if training succeeds |
+| fasttext.bin.zst | Language-specific fastText CBOW model (required by default) |
 | manifest.json | Source hashes, file hashes, schema/config, model status, vector decoding scheme |
 
 Original dumps may be partial; features only represent already-published articles.
 
 ## Text normalization
 
-Unicode NFKC normalization plus case folding and folding of common typographic
-quotes, dashes and spacing. No transliteration to ASCII: preserve accents and
+Unicode NFKC normalization plus Unicode case folding (language-independent)
+and folding of common typographic quotes, dashes and spacing. **Every vocabulary
+term, TF-IDF feature, fastText training token, and Bekko input uses this folded
+form, for all languages.** Original article titles and text remain unchanged. No transliteration to ASCII: preserve accents and
 non-Latin scripts. Unicode word extraction, with overlapping character
 bigrams for unsegmented CJK/Thai runs. This is deliberately lightweight and
 not a sophisticated language-specific morphological tokenizer.
@@ -52,7 +54,7 @@ complete 5K sparse TF-IDF and BM15 score arrays as JSON cells.
 | Importance | mean_idf, max_tfidf, tfidf_l2, tfidf_top5_share, tfidf_entropy, bm15_sum, bm15_max |
 | Extractive | saliency, title_overlap, lead_relevance, representative_sentence, keywords_json |
 | Intermediate | word_counts_json, tfidf_sparse_json, bm15_sparse_json |
-| Embedding | vector_q8_b64, vector_scales_b64, semantic_available, fasttext_training_tokens |
+| Embedding | vector_q8_b64, vector_scales_b64; fasttext_q8_b64, fasttext_scales_b64; bekko_q8_b64, bekko_scales_b64; bekko_input_tokens, bekko_truncated, bekko_available, semantic_available, fasttext_training_tokens |
 
 Smoothed TF-IDF uses (1 + ln(tf)) × (ln((N+1)/(df+1)) + 1).
 BM15 uses a BM25-family formula with k1=1.5 and b=0.75 and average
@@ -62,28 +64,47 @@ A representative sentence is selected from the first 80 article sentences
 using keyword-weighted lexical relevance; it is extractive, not generated.
 TF-IDF token counts are not counts for any particular LLM tokenizer.
 
-## Combined 200D vector
+## Per-article Bekko + fastText and combined 200D vector
 
-- 160D: TF-IDF-weighted fastText word vectors from a small per-language
-  CBOW model; one epoch, at most 2 million sampled tokens, 30K subword
-  buckets, 2 CPU threads and 180-second training timeout.
-- 32D: deterministic signed-hash projection of the 5K TF-IDF features.
-- 8D: normalized article-level scalar metrics.
-- Relative weights: 0.8 / 0.18 / 0.02, then L2 normalize.
+**Every article** is encoded by both models by default. No sampling for
+article-level embedding; fastText training alone uses bounded sampling.
 
-The vector is approximately semantic, not a Transformer embedding. If
-fastText cannot train and allow_lexical_only=true, the semantic portion is
-zero-filled and semantic_available=0. Do not treat fallback vectors as
-semantic embeddings.
+- **160D standalone fastText:** TF-IDF-weighted, normalized word embeddings
+  trained with a separate small CBOW model per language. One epoch,
+  up to 2M sampled training tokens, 30K subword buckets, two CPU threads,
+  180-second training timeout.
+- **128D standalone Bekko:** the multilingual
+  `hotchpotch/bekko-embedding-v1-a8m` model via CPU OpenVINO.
+  Each title and bounded article lead is Unicode-NFKC case-folded and
+  encoded with at most 256 model tokens, in 16-article batches.
+  **This is a partial-context article embedding**, not a full-document
+  Transformer representation. The entire article still contributes to
+  TF-IDF, all word counts, metrics and fastText pooling. Record the
+  Bekko input token count and whether the excerpt was truncated.
+- **200D mixed vector:** deterministic signed projection of 160D fastText
+  down to 96D; first 64D of Bekko's Matryoshka representation;
+  32D signed hash of TF-IDF; eight scalar article metrics.
+  Weighted 0.68 / 0.22 / 0.08 / 0.02 and L2 normalized.
 
-Each 200D vector is signed int8 with a float16 scale for each block of 32
-dimensions: 200 bytes plus 14 scale bytes before base64 encoding. This
-preserves substantially more precision than global-scale quantization.
-Decode with scripts.article_features.dequantize(encoded, scales).
+Both standalone embeddings and the combined representation are saved.
+The 128D Bekko vectors can be compared *across languages* approximately;
+per-language fastText and the combined vectors are **not aligned across languages**.
 
-The signed projection and int8 quantization are deterministic. Multi-threaded
-fastText optimization is stochastic; the published model is the reproducibility
-reference.
+All vectors use symmetric signed-int8 quantization with one float16 scale
+per block of 32 dimensions: 160/128/200 signed bytes respectively,
+plus 10/8/14 bytes of per-block scales before base64 encoding.
+Decode with `scripts.article_features.dequantize(encoded, scales)`.
+
+There is **no silent Bekko fallback**: unavailable dependencies, invalid
+model output, or partial encoding fail the job. fastText also fails by
+default if training fails; the `allow_lexical_only` switch exists only
+for explicit diagnostics and marks missing fastText components as unavailable.
+
+The signed-hash projection and vector quantization are deterministic.
+Multi-threaded fastText training is stochastic; the released model and
+manifest are the reproducibility reference. Case folding can discard
+acronym/proper-name distinctions and does not guarantee faster Bekko
+inference. Its benefit is normalization consistency.
 
 ## SQLite FTS5 and performance
 
@@ -98,7 +119,8 @@ disabled without losing the ordinary article metrics or counts.
 
 The pipeline streams source gzip archives once to a temporary SQLite corpus,
 then calculates vocabulary and metrics from stored compressed counts.
-fastText uses a capped training sample; there are no per-article API calls.
+fastText uses a capped training sample; Bekko runs on every article with bounded input.
+There are no per-article API calls.
 When source hashes, config and artifact checksums match a published release,
 the workflow skips it. New artifacts are published to Hugging Face in one
 atomic commit. A conservative disk preflight prevents giant languages
@@ -112,4 +134,5 @@ does not run as part of standard Parquet publication.
 Local usage:
 
     python -m pip install numpy zstandard fasttext-wheel stopwordsiso==0.7.1
-    python scripts/article_features.py data/*.txt.gz --language en --output article-features --vocab 10000 --tfidf 5000 --allow-lexical-only
+    python -m pip install 'sentence-transformers[openvino]>=5.0' 'transformers>=4.57,<5'
+    python scripts/article_features.py data/*.txt.gz --language en --output article-features --vocab 10000 --tfidf 5000
