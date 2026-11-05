@@ -30,7 +30,7 @@ jobs:
       - name: Install converter dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r REQUIREMENTS.TXT kaggle huggingface_hub
+          python -m pip install -r REQUIREMENTS.TXT kaggle six huggingface_hub
 
       - name: Download current Simple English dump
         run: |
@@ -45,23 +45,48 @@ jobs:
           gzip -t output/simplewiki_01_of_01.txt.gz
           test "$(gzip -cd output/simplewiki_01_of_01.txt.gz | wc -l)" -gt 0
 
-      - name: Configure Kaggle credentials
-        if: ${{ env.KAGGLE_TOKEN != '' }}
-        run: echo "KAGGLE_API_TOKEN=$KAGGLE_TOKEN" >> "$GITHUB_ENV"
-
-      - name: Publish to Kaggle
-        if: ${{ env.KAGGLE_TOKEN != '' }}
-        run: |
-          cp kaggle-metadata.json output/dataset-metadata.json
-          sed -i "s#ffatty/plain-text-wikipedia-simpleenglish#$SIMPLE_KAGGLE_DATASET#" output/dataset-metadata.json
-          kaggle datasets version -p output             -m "Refresh Simple English Wikipedia ($(date -u +%Y-%m-%d))" --dir-mode zip
-
-      - name: Publish to Hugging Face
+      - name: Publish refreshed source data to Hugging Face first
         if: ${{ env.HF_TOKEN != '' }}
+        shell: bash
         run: |
-          hf upload "$SIMPLE_HF_REPO" output             --repo-type dataset --token "$HF_TOKEN" --path-in-repo data             --commit-message "Refresh Simple English Wikipedia ($(date -u +%Y-%m-%d))"
+          set -euo pipefail
+          hf upload "$SIMPLE_HF_REPO" output \
+            --repo-type dataset --token "$HF_TOKEN" --path-in-repo data \
+            --commit-message "Refresh Simple English Wikipedia ($(date -u +%Y-%m-%d))"
+
+      - name: Check Kaggle CLI credentials before updating existing version
+        id: kaggle
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$KAGGLE_TOKEN" ]] && python scripts/kaggle_auth.py --owner ffatty; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Kaggle unavailable; Hugging Face refresh is independent"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish complete Kaggle version with existing files retained
+        if: ${{ steps.kaggle.outputs.enabled == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Never version new raw text alongside stale Parquet/SQLite.
+          kaggle datasets files "$SIMPLE_KAGGLE_DATASET" --csv > "$RUNNER_TEMP/previous-files.csv"
+          if grep -Eq '\.parquet|\.sqlite\.zst' "$RUNNER_TEMP/previous-files.csv"; then
+            echo "::warning::Existing Kaggle structured files must be regenerated first; defer this Kaggle version until the structured-fleet rollout."
+            exit 0
+          fi
+          mkdir -p current
+          kaggle datasets download -d "$SIMPLE_KAGGLE_DATASET" -p current --unzip
+          cp output/*.txt.gz current/
+          cp kaggle-metadata.json current/dataset-metadata.json
+          sed -i "s#ffatty/plain-text-wikipedia-simpleenglish#$SIMPLE_KAGGLE_DATASET#" current/dataset-metadata.json
+          kaggle datasets version -p current \
+            -m "Refresh Simple English Wikipedia ($(date -u +%Y-%m-%d))" \
+            --dir-mode skip --keep-tabular
 
       - name: Free runner disk
         if: always()
         run: |
-          rm -rf output simplewiki.xml.bz2
+          rm -rf output current simplewiki.xml.bz2
