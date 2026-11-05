@@ -2,6 +2,11 @@
 
 Convert official Wikimedia dumps into independently compressed, UTF-8 plaintext article archives. This maintained fork automates multilingual builds and publishes the output to **Hugging Face** and **Kaggle**.
 
+
+## Structured Parquet and SQLite editions
+
+Existing published plaintext shards can also be exported as **Zstandard Parquet** (ML/analytics) or **compressed SQLite** (offline SQL, optional FTS5 search). The new format files live alongside the original archives in the **same dataset per language**; no XML reconversion is required. The conversion is additive and preserves source SHA-256 provenance. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
+
 ## Published datasets and destinations
 
 | Wikipedia edition | Hugging Face | Kaggle |
