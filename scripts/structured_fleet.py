@@ -95,8 +95,12 @@ def current_manifest(api, repo: str, name: str, kind: str,
         artifact = remote.get(f"structured/{record['path']}")
         artifact_sha = source_hash(artifact) if artifact is not None else None
         return (found["source_sha256"] == source_digest
-                and isinstance(found.get("articles"), int) and found["articles"] > 0
-                and artifact is not None and artifact.size == record["size_bytes"]
+                and (kind != "parquet" or (isinstance(found.get("articles"), int)
+                                           and found["articles"] > 0))
+                and artifact is not None
+                and (record.get("size_bytes") is None or
+                     getattr(artifact, "size", None) in
+                     (None, int(record["size_bytes"])))
                 and (artifact_sha is None or artifact_sha == record["sha256"])
                 and (not require_fts or record.get("fts5") is True))
     except (OSError, KeyError, ValueError, TypeError) as exc:
