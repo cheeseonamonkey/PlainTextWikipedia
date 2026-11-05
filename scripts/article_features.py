@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import regex
 import sqlite3
 import struct
 import subprocess
@@ -51,7 +52,7 @@ K1, B = 1.5, 0.75
 FOLD = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"',
                       "‐": "-", "‑": "-", "‒": "-", "–": "-",
                       "—": "-", "―": "-", "\u00a0": " ", "…": "..."})
-WORD = re.compile(r"[^\W_]+(?:['-][^\W_]+)*", re.UNICODE)
+WORD = regex.compile(r"[\p{L}\p{N}\p{M}]+(?:['-][\p{L}\p{N}\p{M}]+)*")
 SENTENCES = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])")
 EN_STOP = set(("a an and are as at be been being but by can could did do does "
                "for from had has have he her hers him his how i if in into is it "
