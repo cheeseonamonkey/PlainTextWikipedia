@@ -60,7 +60,7 @@ def retry(label, callback, attempts=4):
 
 
 def current_manifest(api, repo: str, name: str, kind: str,
-                     source_digest: str, remote: dict) -> bool:
+                     source_digest: str, remote: dict, require_fts: bool = False) -> bool:
     path = f"structured/manifests/{name}.{kind}.json"
     if path not in remote:
         return False
@@ -73,7 +73,7 @@ def current_manifest(api, repo: str, name: str, kind: str,
         return (found["source_sha256"] == source_digest
                 and artifact is not None
                 and (artifact_sha is None or artifact_sha == record["sha256"])
-                and (kind != "sqlite" or "fts5" in record))
+                and (not require_fts or record.get("fts5") is True))
     except (OSError, KeyError, ValueError, TypeError):
         return False
 
@@ -83,7 +83,7 @@ def available_repos(api: HfApi):
                    if x.id.startswith("ffatty/plaintext-wikipedia-full-")
                    or x.id == "ffatty/plain-text-wikipedia-simpleenglish")
     if len(repos) > 256:
-        raise RuntimeError(f"GitHub Actions supports at most 256 matrix jobs; found {len(repos)}")
+        raise RuntimeError(f"More than 256 repositories ({len(repos)}); split the rollout into batches")
     if not repos:
         raise RuntimeError("No published Wikipedia datasets found")
     return repos
@@ -121,8 +121,14 @@ def build(repo: str, format: str, fts_max_mb: int) -> None:
         name = Path(path).name.removesuffix(".txt.gz")
         digest = source_hash(info)
         wanted = ("parquet", "sqlite") if format == "both" else (format,)
-        if digest and all(current_manifest(api, repo, name, kind, digest, remote)
-                          for kind in wanted):
+        fts = "sqlite" in wanted and info.size <= fts_max_mb * 1024 * 1024
+
+        def missing(known_hash):
+            return tuple(kind for kind in wanted
+                         if not current_manifest(api, repo, name, kind, known_hash,
+                                                 remote, require_fts=kind == "sqlite" and fts))
+
+        if digest and not missing(digest):
             skipped += 1
             print(f"SKIP already-current {repo}/{name}", flush=True)
             continue
@@ -135,8 +141,15 @@ def build(repo: str, format: str, fts_max_mb: int) -> None:
                 digest_actual = sha256(source)
                 if digest and digest != digest_actual:
                     raise ValueError(f"Source LFS SHA256 mismatch: {path}")
-                fts = format != "parquet" and info.size <= fts_max_mb * 1024 * 1024
-                result = export(source, working / "output", format, fts)
+                kinds = missing(digest_actual)
+                if not kinds:
+                    skipped += 1
+                    print(f"SKIP already-current {repo}/{name}", flush=True)
+                    continue
+                # Build only outdated formats; preserve fresh Parquet/SQLite blobs.
+                selected = "both" if len(kinds) == 2 else kinds[0]
+                result = export(source, working / "output", selected,
+                                fts and "sqlite" in kinds)
                 if result["source_sha256"] != digest_actual:
                     raise ValueError("Export provenance differs from downloaded source")
 
