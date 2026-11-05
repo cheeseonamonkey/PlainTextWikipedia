@@ -13,9 +13,26 @@ structured/parquet/<shard>.parquet   # derived columnar representation
 structured/manifests/<shard>.parquet.json
 ```
 
-Every Parquet file has `title`, `text`, `source_file`, `source_ordinal`,
-and a manifest with source SHA256, output SHA256 and article count.
-`source_ordinal` is one-based inside its input archive, **not a Wikipedia page ID**.
+Every Parquet row is one article. The v2 Parquet schema has:
+
+| Column | Meaning |
+|---|---|
+| `title`, `text` | Article title and cleaned text |
+| `source_file`, `source_ordinal` | Original gzip shard and one-based record position |
+| `char_count` | Unicode code points in article text (not grapheme clusters) |
+| `byte_count` | UTF-8 bytes in article text (not the compressed size) |
+| `word_count` | Whitespace-separated tokens; **not a reliable linguistic word count for CJK and other non-space-separated languages** |
+| `article_url` | Best-effort Wikipedia title link, URL-encoded and language-aware; nullable when no language mapping is supplied |
+
+`article_url` is **not verified as a current, canonical article URL**.
+The original archives do not preserve stable Wikipedia page IDs, redirects,
+image references, or image file names. **No per-article API lookups** occur,
+and image URLs are not included.
+
+Each file has a manifest with schema version, Wikimedia project code, source
+SHA256, output SHA256/MD5 and article count. `source_ordinal` is one-based
+inside its input archive, **not a Wikipedia page ID**. Schema-v1 Parquet is
+re-exported once for v2; subsequent runs skip unchanged v2 output.
 
 The original text stores title, cleaned text and a blank line per article.
 The underlying source can be partial: always check `data/build-manifest.json`
@@ -59,7 +76,7 @@ GitHub limits matrix job fan-out to 256 per workflow run.
 
 ```sh
 python -m pip install pyarrow
-python scripts/structured_export.py simplewiki_01_of_01.txt.gz output --format parquet
+python scripts/structured_export.py simplewiki_01_of_01.txt.gz output --format parquet --wiki-code simple
 python -m unittest discover -s tests -v
 ```
 

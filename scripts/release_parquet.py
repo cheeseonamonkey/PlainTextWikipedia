@@ -175,7 +175,8 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
             "notes": f"wikidata-parquet-manifest-sha256:{fingerprint}",
             "upload_type": "dataset",
             "description": (
-                "<p>Compressed Parquet article text, with source SHA256 provenance, "
+                "<p>Compressed Parquet article text, character/byte/word counts, "
+                "best-effort (unverified) Wikipedia title links and SHA256 provenance, "
                 "derived from Wikimedia Wikipedia dumps. Completeness varies by "
                 "source recovery: consult the build-manifest on Hugging Face.</p>"
                 f"<p>Maintained at {SOURCE}. Source data: Wikimedia/Wikipedia contributors. "

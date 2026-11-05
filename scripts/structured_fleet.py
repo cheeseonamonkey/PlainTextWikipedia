@@ -22,10 +22,12 @@ from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
 try:
     from scripts.structured_export import export
+    from scripts.wiki_metadata import wiki_code
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from structured_export import export
+    from wiki_metadata import wiki_code
 
 
 PREFIX = "ffatty/"
@@ -95,8 +97,11 @@ def current_manifest(api, repo: str, name: str, kind: str,
         artifact = remote.get(f"structured/{record['path']}")
         artifact_sha = source_hash(artifact) if artifact is not None else None
         return (found["source_sha256"] == source_digest
-                and (kind != "parquet" or (isinstance(found.get("articles"), int)
-                                           and found["articles"] > 0))
+                and (kind != "parquet" or (
+                    found.get("schema_version") == 2
+                    and found.get("wikipedia_code") == wiki_code(repo)
+                    and isinstance(found.get("articles"), int)
+                    and found["articles"] > 0))
                 and artifact is not None
                 and (record.get("size_bytes") is None or
                      getattr(artifact, "size", None) in
@@ -217,6 +222,7 @@ def build(repo: str) -> None:
     token = os.getenv("HF_TOKEN")
     if not token:
         raise RuntimeError("HF_TOKEN required for additive publishing")
+    code = wiki_code(repo)  # Validate before any large archive downloads.
     api = HfApi(token=token)
     sources, remote = retry("list existing HF files", lambda: source_files(api, repo))
     if not sources:
@@ -247,7 +253,8 @@ def build(repo: str) -> None:
                         skipped += 1
                         print(f"SKIP already-current {repo}/{name}", flush=True)
                         continue
-                result = export(source, working / "output", "parquet")
+                result = export(source, working / "output", "parquet",
+                                wiki_code=code)
                 if result["source_sha256"] != digest:
                     raise ValueError(f"Source LFS SHA256 mismatch: {path}")
 

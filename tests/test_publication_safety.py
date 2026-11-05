@@ -110,6 +110,7 @@ class TestIncrementalFleet(unittest.TestCase):
         }
         info = {
             "source_sha256": "a" * 64, "articles": 1,
+            "schema_version": 2, "wikipedia_code": "simple",
             "artifacts": {"parquet": {
                 "path": f"parquet/{name}.parquet",
                 "sha256": "b" * 64, "size_bytes": 123,
@@ -144,6 +145,35 @@ class TestIncrementalFleet(unittest.TestCase):
                 current_manifest(SimpleNamespace(token=None), repo, name,
                                  "parquet", "a" * 64, remote)
             dl.assert_called_once()
+
+    def test_legacy_parquet_schema_triggers_rebuild(self):
+        from scripts.structured_fleet import current_manifest
+
+        repo = "ffatty/plain-text-wikipedia-simpleenglish"
+        name = "simplewiki_01_of_01"
+        path = f"structured/parquet/{name}.parquet"
+        manifest = {
+            "source_sha256": "a" * 64, "articles": 1,
+            "schema_version": 1, "wikipedia_code": "simple",
+            "artifacts": {"parquet": {
+                "path": f"parquet/{name}.parquet",
+                "sha256": "b" * 64, "size_bytes": 123,
+            }},
+        }
+        remote = {
+            f"structured/manifests/{name}.parquet.json": object(),
+            path: SimpleNamespace(lfs={"sha256": "b" * 64}, size=123),
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            data = Path(folder) / "manifest.json"
+            data.write_text(json.dumps(manifest))
+            with patch("scripts.structured_fleet.hf_hub_download", return_value=str(data)):
+                self.assertFalse(current_manifest(SimpleNamespace(token=None), repo, name,
+                                                  "parquet", "a" * 64, remote))
+                manifest["schema_version"] = 2
+                data.write_text(json.dumps(manifest))
+                self.assertTrue(current_manifest(SimpleNamespace(token=None), repo, name,
+                                                 "parquet", "a" * 64, remote))
 
     def test_language_titles_preserve_hyphenated_names(self):
         self.assertEqual(language_name("ffatty/plain-text-wikipedia-simpleenglish"),

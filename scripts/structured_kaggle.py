@@ -247,7 +247,11 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
             "\n\n## Choose a format\n"
             "- **Parquet (.parquet)**: Zstandard-compressed, ready for pandas, "
             "DuckDB and columnar analytics. Columns: `title`, `text`, "
-            "`source_file`, `source_ordinal`.\n"
+            "`source_file`, `source_ordinal`, `char_count`, `byte_count`, "
+            "`word_count`, `article_url`. Counts cover article text only; "
+            "word counts use whitespace splitting and are approximate for "
+            "languages without spaces. Article URLs are generated from titles, "
+            "not verified page IDs.\n"
             "- **Original (.txt.gz)**: retained verbatim. Each record uses title, "
             "single-line text, blank line.\n\n"
             "## Provenance and limitations\n"
@@ -264,7 +268,8 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
         def describe(file):
             name = file.name
             if name.endswith(".parquet"):
-                return "Columnar UTF-8 Wikipedia title/text, source archive and ordinal; zstd compressed."
+                return ("UTF-8 article text, provenance, char/byte/word counts, "
+                        "best-effort article links; zstd-compressed.")
             if name.endswith(".txt.gz"):
                 return "Original gzip plaintext archive; title, text, blank line per article."
             if name == "structured-manifest.json":

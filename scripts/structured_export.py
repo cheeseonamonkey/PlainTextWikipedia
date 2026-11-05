@@ -24,6 +24,8 @@ except ModuleNotFoundError as exc:
     from repack_shards import records
 
 FIELDS = ("title", "text", "source_file", "source_ordinal")
+PARQUET_FIELDS = (*FIELDS, "char_count", "byte_count", "word_count", "article_url")
+PARQUET_SCHEMA_VERSION = 2
 
 
 def sha256(path: Path) -> str:
@@ -95,7 +97,8 @@ def finish_sqlite(db: sqlite3.Connection, count: int, fts: bool) -> None:
 
 
 def export(source: Path, destination: Path, format: str = "parquet",
-           fts: bool = False, batch_size: int = 16384, batch_max_mb: int = 32) -> dict:
+           fts: bool = False, batch_size: int = 16384, batch_max_mb: int = 32,
+           wiki_code: str | None = None) -> dict:
     if not source.is_file() or not source.name.endswith(".txt.gz"):
         raise ValueError("Source must be an existing *.txt.gz article archive")
     if format not in ("parquet", "sqlite", "both"):
@@ -106,6 +109,15 @@ def export(source: Path, destination: Path, format: str = "parquet",
         raise ValueError("batch_size must be in [1, 65536]")
     if not 1 <= batch_max_mb <= 512:
         raise ValueError("batch_max_mb must be in [1, 512]")
+    if wiki_code:
+        try:
+            from scripts.wiki_metadata import article_url
+        except ModuleNotFoundError as exc:
+            if exc.name != "scripts":
+                raise
+            from wiki_metadata import article_url
+        # Validate before creating output files, including for empty input.
+        article_url("Main Page", wiki_code)
 
     want_parquet = format in ("parquet", "both")
     want_sqlite = format in ("sqlite", "both")
@@ -129,6 +141,10 @@ def export(source: Path, destination: Path, format: str = "parquet",
                     pa.field("text", pa.string(), nullable=False),
                     pa.field("source_file", pa.string(), nullable=False),
                     pa.field("source_ordinal", pa.int64(), nullable=False),
+                    pa.field("char_count", pa.int64(), nullable=False),
+                    pa.field("byte_count", pa.int64(), nullable=False),
+                    pa.field("word_count", pa.int64(), nullable=False),
+                    pa.field("article_url", pa.string(), nullable=True),
                 ]).with_metadata({b"source_archive": source.name.encode("utf-8")})
                 writer = pq.ParquetWriter(
                     parquet_path, schema, compression="zstd", compression_level=3,
@@ -141,6 +157,14 @@ def export(source: Path, destination: Path, format: str = "parquet",
             for batch in batches(source, batch_size, batch_max_mb * 1024 * 1024):
                 if writer is not None:
                     columns = dict(zip(FIELDS, zip(*batch)))
+                    texts = [row[1] for row in batch]
+                    columns.update({
+                        "char_count": [len(text) for text in texts],
+                        "byte_count": [len(text.encode("utf-8")) for text in texts],
+                        "word_count": [len(text.split()) for text in texts],
+                        "article_url": ([article_url(row[0], wiki_code) for row in batch]
+                                        if wiki_code else [None] * len(batch)),
+                    })
                     table = pa.table(columns, schema=schema)
                     writer.write_table(table, row_group_size=batch_size)
                 if db is not None:
@@ -193,7 +217,10 @@ def export(source: Path, destination: Path, format: str = "parquet",
             "source_file": source.name,
             "source_sha256": sha256(source),
             "articles": count,
-            "columns": list(FIELDS),
+            "columns": list(PARQUET_FIELDS if want_parquet else FIELDS),
+            "schema_version": PARQUET_SCHEMA_VERSION if want_parquet else 1,
+            "wikipedia_code": wiki_code if want_parquet else None,
+            "article_urls_verified": False,
             "wikipedia_page_ids_available": False,
             "artifacts": artifacts,
         }
@@ -202,6 +229,9 @@ def export(source: Path, destination: Path, format: str = "parquet",
         metadata = []
         for kind, artifact in artifacts.items():
             item = {**manifest, "artifacts": {kind: artifact}}
+            if kind == "sqlite":
+                item.update(columns=list(FIELDS), schema_version=1,
+                            wikipedia_code=None)
             path = stage / f"{stem}.{kind}.json"
             path.write_text(json.dumps(item, ensure_ascii=False, indent=2) + "\n",
                             encoding="utf-8")
@@ -229,9 +259,10 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=16384)
     parser.add_argument("--batch-max-mb", type=int, default=32,
                         help="Cap decoded article bytes per batch to reduce memory usage")
+    parser.add_argument("--wiki-code", help="Wikimedia project language code for URL generation")
     args = parser.parse_args()
     result = export(args.source, args.destination, args.format, args.fts,
-                    args.batch_size, args.batch_max_mb)
+                    args.batch_size, args.batch_max_mb, args.wiki_code)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
