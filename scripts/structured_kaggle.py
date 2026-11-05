@@ -52,7 +52,12 @@ def language_name(repo: str) -> str:
                 slug.replace("-", " ").title())
 
 
-def mirror(repo: str, max_mb: int):
+def mirror(repo: str, max_mb: int, require_publish: bool = False):
+    def skip(reason: str):
+        if require_publish:
+            raise RuntimeError(reason)
+        print(f"::warning::{reason}", flush=True)
+
     if not re.fullmatch(r"ffatty/(?:plain-text-wikipedia-simpleenglish|plaintext-wikipedia-full-[a-z0-9-]+)", repo):
         raise ValueError("Unsupported Wikipedia repo")
     if max_mb < 300:
@@ -61,7 +66,7 @@ def mirror(repo: str, max_mb: int):
     files = {x.path: x for x in api.list_repo_tree(repo, repo_type="dataset", recursive=True)}
     sources = {p: x for p, x in files.items() if p.startswith("data/") and p.endswith(".txt.gz")}
     if not sources:
-        print(f"SKIP no source archives: {repo}")
+        skip(f"No source archives: {repo}")
         return
 
     dataset = repo
@@ -70,19 +75,19 @@ def mirror(repo: str, max_mb: int):
     for source, info in sorted(sources.items()):
         digest = source_hash(info)
         if not digest:
-            print(f"::warning::SKIP {repo}: source {source} has no trusted LFS SHA256")
+            skip(f"{repo}: source {source} has no trusted LFS SHA256")
             return
         planned.append((source, digest, None))
         stem = Path(source).name.removesuffix(".txt.gz")
         for kind in ("parquet", "sqlite"):
             manifest_file = f"structured/manifests/{stem}.{kind}.json"
             if manifest_file not in files:
-                print(f"::warning::SKIP {repo}: missing {manifest_file}")
+                skip(f"{repo}: missing {manifest_file}")
                 return
             document = json.loads(Path(hf_hub_download(repo, filename=manifest_file,
                               repo_type="dataset", token=api.token)).read_text())
             if document.get("source_sha256") != digest or not document.get("articles"):
-                print(f"::warning::SKIP {repo}: {kind} is stale or empty for {source}")
+                skip(f"{repo}: {kind} is stale or empty for {source}")
                 return
             artifact = document["artifacts"][kind]
             location = f"structured/{artifact['path']}"
@@ -93,25 +98,31 @@ def mirror(repo: str, max_mb: int):
     # Kaggle's latest dataset has a 50 top-level-file and 200GB total limit.
     # We flatten 16*3 source/format files plus one compact manifest.
     if len(planned) + 1 > 49:
-        print(f"::warning::SKIP {repo}: {len(planned)} input files exceed safe Kaggle file budget")
+        skip(f"{repo}: {len(planned)} input files exceed safe Kaggle file budget")
         return
     total = sum(int(files[name].size) for name, _, _ in planned)
+    # Preflight runner capacity before downloading the complete old corpus;
+    # account for the HF cache, assembled stage, and transient Kaggle upload.
+    available = shutil.disk_usage(tempfile.gettempdir()).free
+    if total * 2 + 1_000_000_000 > available:
+        skip(f"{repo}: need ~{(total * 2 + 1_000_000_000)/1e9:.1f} GB "
+             f"temporary disk; only {available/1e9:.1f} GB free on runner")
+        return
     if total > max_mb * 1024 * 1024:
-        print(f"::warning::SKIP {repo}: {total / 1048576:.0f} MiB would exceed "
-              f"{max_mb} MiB CI staging budget; HF remains published")
+        skip(f"{repo}: {total / 1048576:.0f} MiB exceeds {max_mb} MiB CI staging budget")
         return
 
     # Do not create new dataset IDs here: only version existing datasets.
     existing = run("status", dataset, "--format", "json", check=False)
     if existing.returncode:
-        print(f"::warning::SKIP {dataset}: not an accessible existing Kaggle dataset")
+        skip(f"{dataset}: no accessible existing Kaggle dataset")
         return
     try:
         status = json.loads(existing.stdout)
     except ValueError:
         raise RuntimeError(f"Kaggle status output malformed for {dataset}")
     if str(status.get("status", "")).lower() != "ready":
-        print(f"::warning::SKIP {dataset}: not READY; refusing to replace pending data")
+        skip(f"{dataset}: not READY; refusing to replace pending data")
         return
     with tempfile.TemporaryDirectory(prefix="wiki-kaggle-") as tmp:
         root = Path(tmp)
@@ -213,7 +224,7 @@ def mirror(repo: str, max_mb: int):
             json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         count = len([p for p in stage.iterdir() if p.is_file() and p.name != "dataset-metadata.json"])
         if count > 50:
-            print(f"::warning::SKIP {repo}: {count} files after preserving existing Kaggle data")
+            skip(f"{repo}: {count} files after preserving existing Kaggle data")
             return
         print(f"Preserving {len(old_files)} old file(s); publishing {len(planned)} source "
               f"and structured files to {dataset} ({total / 1048576:.0f} MiB)", flush=True)
@@ -232,8 +243,10 @@ def main():
     p.add_argument("--repo", required=True)
     p.add_argument("--max-mb", type=int, default=2500,
                    help="Upper bound for compressed source+structured staging")
+    p.add_argument("--require-publish", action="store_true",
+                   help="Fail rather than silently skip an existing Kaggle dataset")
     args = p.parse_args()
-    mirror(args.repo, args.max_mb)
+    mirror(args.repo, args.max_mb, require_publish=args.require_publish)
 
 
 if __name__ == "__main__":
