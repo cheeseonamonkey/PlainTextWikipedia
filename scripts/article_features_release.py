@@ -51,7 +51,10 @@ def config(args, language):
             "fasttext_timeout": args.fasttext_timeout,
             "threads": args.threads,
             "fts5": not args.no_fts5,
-            "allow_lexical_only": args.allow_lexical_only}
+            "allow_lexical_only": args.allow_lexical_only,
+            "bekko_model": "hotchpotch/bekko-embedding-v1-a8m",
+            "bekko_max_tokens": 256,
+            "casefold_all_embeddings": True}
 
 
 def is_current(api, repo, source_list, settings, remote):
