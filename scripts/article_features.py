@@ -36,11 +36,14 @@ except ModuleNotFoundError as exc:
         raise
     from repack_shards import records
 
-VERSION = 1
+VERSION = 2
 VOCAB_SIZE = 10_000
 TFIDF_SIZE = 5_000
 DENSE_DIMS = 200
 FASTTEXT_DIMS = 160
+FASTTEXT_PROJECTED_DIMS = 96
+BEKKO_DIMS = 128
+BEKKO_PROJECTED_DIMS = 64
 LEXICAL_DIMS = 32
 METRIC_DIMS = 8
 K1, B = 1.5, 0.75
@@ -70,6 +73,9 @@ CSV_FIELDS = (
     "lead_relevance", "representative_sentence",
     "word_counts_json", "tfidf_sparse_json", "bm15_sparse_json",
     "keywords_json", "vector_q8_b64", "vector_scales_b64",
+    "fasttext_q8_b64", "fasttext_scales_b64",
+    "bekko_q8_b64", "bekko_scales_b64", "bekko_input_tokens",
+    "bekko_truncated", "bekko_available",
     "semantic_available", "fasttext_training_tokens",
 )
 
@@ -126,9 +132,9 @@ def norm(values: np.ndarray) -> np.ndarray:
 
 
 def quantize(vector: np.ndarray, block: int = 32) -> tuple[str, str]:
-    """Symmetric per-block int8 with float16 scales (7 scales for 200 dims)."""
-    if len(vector) != DENSE_DIMS:
-        raise ValueError("Expected 200-dimensional vector")
+    """Symmetric per-block int8 with float16 scales; accepts arbitrary dimensions."""
+    if not len(vector) or not np.isfinite(vector).all():
+        raise ValueError("Expected nonempty finite vector")
     encoded, scales = bytearray(), bytearray()
     for start in range(0, len(vector), block):
         section = vector[start:start + block]
@@ -160,14 +166,26 @@ def lexical_hash(scores: list[tuple[int, float]]) -> np.ndarray:
     return norm(arr)
 
 
+# Fixed signed random projection; no fitted cross-language parameters needed.
+FASTTEXT_PROJECTION = (np.random.default_rng(2026).choice(
+    [-1., 1.], (FASTTEXT_DIMS, FASTTEXT_PROJECTED_DIMS))
+    .astype(np.float32) / math.sqrt(FASTTEXT_PROJECTED_DIMS))
+
+
 def vectorize(semantic: np.ndarray | None, lexical: np.ndarray,
-              metrics: list[float]) -> tuple[str, str]:
-    if len(metrics) != METRIC_DIMS:
-        raise ValueError("Invalid scalar metrics")
-    sem = norm(semantic.astype(np.float32)) if semantic is not None else np.zeros(FASTTEXT_DIMS, np.float32)
-    components = np.concatenate((sem * .8, lexical * .18,
-                                 np.asarray(metrics, dtype=np.float32) * .02))
-    return quantize(norm(components))
+              metrics: list[float], bekko: np.ndarray) -> tuple[str, str]:
+    """160D fastText -> 96D, plus 64D Bekko, 32D TF-IDF, 8D metrics."""
+    if len(metrics) != METRIC_DIMS or bekko.shape != (BEKKO_DIMS,):
+        raise ValueError("Invalid mixed-vector inputs")
+    semantic96 = (norm(semantic.astype(np.float32) @ FASTTEXT_PROJECTION)
+                  if semantic is not None else np.zeros(FASTTEXT_PROJECTED_DIMS, np.float32))
+    parts = np.concatenate((semantic96 * .68,
+                            norm(bekko[:BEKKO_PROJECTED_DIMS].astype(np.float32)) * .22,
+                            lexical * .08,
+                            np.asarray(metrics, dtype=np.float32) * .02))
+    if len(parts) != DENSE_DIMS:
+        raise RuntimeError("Invalid combined vector shape")
+    return quantize(norm(parts))
 
 
 def source_articles(files: list[Path]):
@@ -319,7 +337,8 @@ def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
 
 def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
                         docs: int, avglen: float,
-                        fasttext_vectors: np.ndarray | None, training_tokens: int):
+                        fasttext_vectors: np.ndarray | None, training_tokens: int,
+                        bekko_embedding: np.ndarray, bekko_tokens: int):
     (article_id, source_file, ordinal, title, url, body, blob,
      length, chars, bytes_, sentences) = row
     counts = json.loads(zlib.decompress(blob))
@@ -382,7 +401,11 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
         title_overlap,
         min(1., entropy / 10),
     ]
-    encoded, scales = vectorize(semantic, lexical, scalar)
+    encoded, scales = vectorize(semantic, lexical, scalar, bekko_embedding)
+    fasttext_encoded, fasttext_scales = quantize(
+        norm(semantic) if semantic is not None
+        else np.zeros(FASTTEXT_DIMS, np.float32))
+    bekko_encoded, bekko_scales = quantize(norm(bekko_embedding))
     # Salient extractive sentence: the highest-scoring sentence among a bounded
     # set, not a language-model summary; empty without stored body.
     topweights = {t: v for _, v, t in weighted}
@@ -428,6 +451,10 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
         "bm15_sparse_json": compact(sorted((idx, round(v, 6)) for idx, v, _ in bmweighted)),
         "keywords_json": compact([[term, round(v, 6)] for _, v, term in top]),
         "vector_q8_b64": encoded, "vector_scales_b64": scales,
+        "fasttext_q8_b64": fasttext_encoded, "fasttext_scales_b64": fasttext_scales,
+        "bekko_q8_b64": bekko_encoded, "bekko_scales_b64": bekko_scales,
+        "bekko_input_tokens": bekko_tokens, "bekko_truncated": int(bekko_tokens > 256),
+        "bekko_available": 1,
         "semantic_available": int(fasttext_vectors is not None),
         "fasttext_training_tokens": training_tokens,
     }
@@ -452,7 +479,8 @@ def build(files: list[Path], output: Path, code: str, *,
           vocab_size: int = VOCAB_SIZE, shortlist: int = TFIDF_SIZE,
           max_train_tokens: int = 2_000_000, sample_mod: int = 4,
           timeout: int = 180, fts5: bool = True,
-          allow_lexical_only: bool = False, threads: int = 2) -> dict:
+          allow_lexical_only: bool = False, threads: int = 2,
+          bekko: bool = True) -> dict:
     if not files or any(not p.is_file() or not p.name.endswith(".txt.gz") for p in files):
         raise ValueError("Provide existing .txt.gz archives")
     if not 1 <= shortlist <= vocab_size <= 50_000:
@@ -482,6 +510,15 @@ def build(files: list[Path], output: Path, code: str, *,
             vectors = (np.stack([model.get_word_vector(term) for _, term, *_ in entries])
                        .astype(np.float32) if model is not None and entries else None)
             avglen = totals["tokens"] / totals["articles"]
+            if not bekko:
+                raise ValueError("Bekko is required for complete semantic features")
+            try:
+                from scripts.bekko_features import BekkoEncoder, embedding_input
+            except ModuleNotFoundError as exc:
+                if exc.name != "scripts":
+                    raise
+                from bekko_features import BekkoEncoder, embedding_input
+            encoder = BekkoEncoder()  # Load exactly once per language.
             metrics_path = stage / "article-metrics.csv.gz"
             with gzip.open(metrics_path, "wt", encoding="utf-8", newline="", compresslevel=4) as out:
                 writer = csv.DictWriter(out, CSV_FIELDS)
@@ -489,16 +526,23 @@ def build(files: list[Path], output: Path, code: str, *,
                 cur = db.execute("""SELECT id,source_file,source_ordinal,title,
                     article_url,text,counts,token_count,char_count,byte_count,
                     sentence_count FROM articles ORDER BY id""")
-                for row in cur:
-                    result = metrics_for_article(row, lookup, stopwords,
-                                                 totals["articles"], avglen,
-                                                 vectors, totals["train_tokens"])
-                    writer.writerow(result)
-                    db.execute("INSERT INTO metrics VALUES (?,?)",
-                               (row[0], compact({key: val for key, val in result.items()
-                                                if key not in ("word_counts_json",
-                                                               "tfidf_sparse_json",
-                                                               "bm15_sparse_json")})))
+                from itertools import islice
+                while chunk := list(islice(cur, 16)):
+                    inputs = [embedding_input(row[3], row[5]) for row in chunk]
+                    embeddings, lengths = encoder.encode(inputs)
+                    if len(embeddings) != len(chunk) or len(lengths) != len(chunk):
+                        raise RuntimeError("Bekko did not return one vector per article")
+                    for row, bekko_vector, input_tokens in zip(chunk, embeddings, lengths):
+                        result = metrics_for_article(row, lookup, stopwords,
+                                                     totals["articles"], avglen,
+                                                     vectors, totals["train_tokens"],
+                                                     bekko_vector, input_tokens)
+                        writer.writerow(result)
+                        db.execute("INSERT INTO metrics VALUES (?,?)",
+                                   (row[0], compact({key: val for key, val in result.items()
+                                                    if key not in ("word_counts_json",
+                                                                   "tfidf_sparse_json",
+                                                                   "bm15_sparse_json")})))
             if fts5:
                 db.execute("INSERT INTO article_fts(article_fts) VALUES('rebuild')")
                 db.execute("INSERT INTO article_fts(article_fts) VALUES('integrity-check')")
@@ -538,10 +582,15 @@ def build(files: list[Path], output: Path, code: str, *,
                              "training_tokens": totals["train_tokens"],
                              "sample_mod": sample_mod, "train_token_cap": max_train_tokens,
                              "timeout_seconds": timeout},
+                "bekko": {"model": "hotchpotch/bekko-embedding-v1-a8m",
+                          "backend": "openvino", "device": "cpu", "dimensions": 128,
+                          "max_input_tokens": 256, "batch_size": 16,
+                          "input": "NFKC+casefold title and bounded lead excerpt",
+                          "required": True},
                 "vector": {"dimensions": DENSE_DIMS,
-                           "components": {"fasttext": 160, "signed_tfidf_hash": 32,
-                                          "document_metrics": 8},
-                           "weighting": [0.8, 0.18, 0.02],
+                           "components": {"fasttext_projected": 96, "bekko": 64,
+                                          "signed_tfidf_hash": 32, "document_metrics": 8},
+                           "weighting": [0.68, 0.22, 0.08, 0.02],
                            "quantization": "symmetric_int8_per_32_float16_scale",
                            "byte_order": "little",
                            "column": "vector_q8_b64", "scales": "vector_scales_b64"},
@@ -581,6 +630,8 @@ def main():
     p.add_argument("--threads", type=int, default=2)
     p.add_argument("--no-fts5", action="store_true")
     p.add_argument("--allow-lexical-only", action="store_true")
+    p.add_argument("--no-bekko", action="store_true",
+                   help="Disable Bekko (incomplete release; rejected by full builder)")
     args = p.parse_args()
     if args.sources and args.sources[0].name == "_train":
         train_fasttext_worker(Path(args.sources[1]), Path(args.sources[2]),
@@ -592,7 +643,7 @@ def main():
                    shortlist=args.tfidf, max_train_tokens=args.train_token_cap,
                    sample_mod=args.sample_mod, timeout=args.fasttext_timeout,
                    fts5=not args.no_fts5, allow_lexical_only=args.allow_lexical_only,
-                   threads=args.threads)
+                   threads=args.threads, bekko=not args.no_bekko)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
