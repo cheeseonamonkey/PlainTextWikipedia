@@ -1,89 +1,64 @@
-# Structured Wikipedia exports
+# Wikipedia data formats
 
-The existing plaintext datasets remain canonical and unchanged. GitHub Actions can
-turn each published `.txt.gz` archive into **Parquet** (recommended for training
-and analytics) and optionally **SQLite** (offline lookup and SQL, with optional
-FTS5 indexing). This reuses existing published data; it does not re-download
-Wikimedia XML or redo the wikitext conversion.
+Keep the **existing original plaintext gzip archives** and add **Zstandard Parquet**.
+The Parquet is generated from already-published text; no Wikimedia XML rebuild.
 
-## Organization
+## Files
 
-Keep **one dataset per Wikipedia language**, not separate datasets for every
-format. Each language's Hugging Face repository holds its existing `data/`
-archives plus:
+Each language's existing Hugging Face dataset contains:
 
 ```text
-structured/
-  parquet/<original-shard>.parquet
-  sqlite/<original-shard>.sqlite.zst
-  manifests/<original-shard>.parquet.json
-  manifests/<original-shard>.sqlite.json
+data/<shard>.txt.gz                   # unchanged source text
+structured/parquet/<shard>.parquet   # derived columnar representation
+structured/manifests/<shard>.parquet.json
 ```
 
-Each format shards rather than repeats articles *within* that format. Keeping
-multiple representations does duplicate storage. Large languages should
-prioritize Parquet; SQLite and FTS5 are optional.
+Every Parquet file has `title`, `text`, `source_file`, `source_ordinal`,
+and a manifest with source SHA256, output SHA256 and article count.
+`source_ordinal` is one-based inside its input archive, **not a Wikipedia page ID**.
 
-The original three-line article format includes the title, cleaned single-line
-body, and blank separator. It **does not preserve Wikimedia page IDs**. Both
-structured formats expose `title`, `text`, `source_file`, and
-`source_ordinal` (1-based within the input archive). Do not interpret the
-ordinal or the SQLite auto-generated `id` as a Wikipedia page ID.
+The original text stores title, cleaned text and a blank line per article.
+The underlying source can be partial: always check `data/build-manifest.json`
+before claiming full edition coverage.
 
-Parquet uses Zstandard compression and small, stream-written row groups.
-SQLite files are compressed with Zstandard **after** building and verifying
-the database. Decompress `.sqlite.zst` before querying.
+## Publishing
 
-## GitHub Actions
+- [Entire language fleet](../.github/workflows/structured-fleet.yml): manually
+  run; **Hugging Face, Kaggle and Zenodo are all enabled by default**.
+- [One language](../.github/workflows/structured-wikipedia.yml): same publish
+  helpers and destinations, scoped to a particular existing dataset.
+- Hugging Face publishes under the **same dataset ID**, preserving original files.
+- Kaggle versions the **same dataset ID** with original text and Parquet; the
+  previous file set is downloaded first to avoid silently dropping existing
+  public data. Oversized editions fail explicitly instead of discarding files.
+- Zenodo receives **Parquet only**, plus a provenance manifest.
 
-Use [Structured Wikipedia (Parquet + SQLite)](../.github/workflows/structured-wikipedia.yml):
+No workflow creates new SQLite databases or FTS5 indexes. Older SQLite
+downloads are left available where already published. The low-level
+`scripts/structured_export.py` still supports SQLite for historical consumers
+and test compatibility; release jobs use Parquet only.
 
-- **Automatic on merge to main:** Simple English pilot, both formats and FTS5.
-- **Manual:** Select an existing `ffatty/...` Hugging Face dataset,
-  `parquet` (default), `sqlite`, or `both`; FTS5 is opt-in.
-- **Build-only mode:** Disable publishing to obtain short-lived CI artifacts.
-- Source shards become independent CI jobs, at most two in parallel.
-- Per-format manifests record source archive SHA256, output SHA256,
-  article count, and whether SQLite FTS5 was built.
-- Existing `.txt.gz` archives and original coverage manifests are preserved.
-  A converted file does **not** establish that the underlying Wikipedia
-  snapshot had complete source coverage.
+No large intermediate GitHub Actions artifacts are uploaded. Export jobs stream
+source shards, publish, and remove temporary runner data.
 
-Example local conversion:
+## Example
 
-```bash
-python -m pip install pyarrow zstandard
-python scripts/structured_export.py enwiki_01_of_16.txt.gz output --format parquet
-python scripts/structured_export.py simplewiki_01_of_01.txt.gz output --format both --fts
+```sh
+python -m pip install pyarrow
+python scripts/structured_export.py simplewiki_01_of_01.txt.gz output --format parquet
 python -m unittest discover -s tests -v
 ```
 
-Example SQLite search after decompressing a shard:
+```python
+from huggingface_hub import HfApi, hf_hub_download
+import pyarrow.parquet as pq
 
-```sql
-SELECT articles.title, substr(articles.text, 1, 240) AS excerpt
-FROM articles_fts JOIN articles ON articles.id = articles_fts.rowid
-WHERE articles_fts MATCH 'astronomy'
-ORDER BY bm25(articles_fts)
-LIMIT 10;
+repo = "ffatty/plain-text-wikipedia-simpleenglish"
+files = HfApi().list_repo_files(repo, repo_type="dataset")
+name = next(p for p in files if p.startswith("structured/parquet/") and
+            p.endswith(".parquet"))
+path = hf_hub_download(repo_id=repo, filename=name, repo_type="dataset")
+print(pq.read_table(path, columns=["title", "text"]).slice(0, 5))
 ```
 
-SQLite FTS5 uses the built-in `unicode61` tokenizer. Its token boundaries
-are not linguistically optimal for languages without whitespace-delimited words.
-For Chinese, Japanese, and similar editions, use a language-aware search layer.
-
-## Publishing considerations
-
-**Hugging Face:** uploads are additive under `structured/` and do not
-overwrite the existing text shards. A source archive's Parquet and SQLite
-manifests are independent so they can be updated without falsifying provenance
-for an older alternate-format artifact.
-
-**Kaggle:** an existing dataset's new version needs its full file set staged.
-A structured-only directory must **not** be uploaded as a replacement version
-or it could omit the original text archives. The Simple English pilot can be
-mirrored after verifying its structured exports. Multi-gigabyte editions
-should avoid unnecessary repeated uploads.
-
-The project's Wikimedia attribution and CC BY-SA reuse requirements apply
-equally to all derived representations.
+The Wikimedia CC BY-SA attribution and share-alike requirements still apply.
