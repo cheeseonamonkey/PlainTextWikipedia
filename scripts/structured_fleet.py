@@ -11,9 +11,11 @@ import argparse
 import hashlib
 import json
 import os
+import random
 import re
 import tempfile
 import time
+import urllib.error
 from pathlib import Path
 
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
@@ -48,15 +50,34 @@ def source_hash(info) -> str | None:
     return getattr(lfs, "sha256", None)
 
 
+def transient_error(exc: Exception) -> bool:
+    """Retry throttling/transport failures, never permissions or bad manifests."""
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status is not None:
+        return status in (408, 409, 425, 429) or 500 <= status < 600
+    if isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError)):
+        return True
+    try:
+        import httpx
+        import requests
+        return isinstance(exc, (httpx.TransportError, requests.exceptions.ConnectionError,
+                                requests.exceptions.Timeout))
+    except ImportError:
+        return False
+
+
 def retry(label, callback, attempts=4):
     for n in range(attempts):
         try:
             return callback()
         except Exception as exc:
-            if n == attempts - 1:
+            if n == attempts - 1 or not transient_error(exc):
                 raise
-            print(f"Retrying {label} after transient error ({type(exc).__name__})", flush=True)
-            time.sleep(min(80, 8 * 2 ** n))
+            delay = min(80, 8 * 2 ** n) + random.random() * 3
+            print(f"Retrying transient {label} ({type(exc).__name__}, "
+                  f"attempt {n + 2}/{attempts})", flush=True)
+            time.sleep(delay)
 
 
 def current_manifest(api, repo: str, name: str, kind: str,
