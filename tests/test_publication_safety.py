@@ -164,7 +164,7 @@ class TestParquetOnlyPublishing(unittest.TestCase):
             temp = Path(folder)
             raw = temp / raw_name
             parquet = temp / parquet_name
-            raw.write_bytes(b"Title\\nBody\\n\\n")
+            raw.write_bytes(b"Title\nBody\n\n")
             parquet.write_bytes(b"PAR1testPAR1")
             h = lambda file: hashlib.sha256(file.read_bytes()).hexdigest()
             doc = {
@@ -224,7 +224,7 @@ class TestParquetOnlyPublishing(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             raw = Path(folder) / f"{name}.txt.gz"
             with gzip.open(raw, "wt", encoding="utf-8") as stream:
-                stream.write("Title\\nBody\\n\\n")
+                stream.write("Title\nBody\n\n")
             with raw.open("rb") as stream:
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
             source = SimpleNamespace(path=f"data/{raw.name}",
