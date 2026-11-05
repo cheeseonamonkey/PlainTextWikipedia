@@ -17,11 +17,6 @@ on:
         description: Max compressed data (MiB) per Kaggle runner
         type: number
         default: 2500
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/structured-fleet.yml
-
 permissions:
   contents: read
 
@@ -75,7 +70,7 @@ jobs:
 
   export:
     name: HF ${{ matrix.repo }}
-    needs: plan
+    needs: [plan, kaggle-auth]
     if: needs.plan.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -100,30 +95,18 @@ jobs:
           python scripts/structured_fleet.py build \
             --repo "$REPO" --format "$FORMAT" --fts-max-mb 100
 
-  kaggle:
-    name: Kaggle version ${{ matrix.repo }}
-    needs: [plan, kaggle-auth, export]
-    if: ${{ always() && needs.plan.result == 'success' && needs.kaggle-auth.outputs.enabled == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-      REPO: ${{ matrix.repo }}
-      MAX_MB: ${{ github.event_name == 'push' && '2500' || inputs.kaggle_stage_mb }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install huggingface_hub kaggle
-      - name: Authenticate with Kaggle CLI and persist its proven mode
+      - name: Set up Kaggle CLI for existing dataset versions
+        if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
+        run: python -m pip install kaggle
+      - name: Authenticate Kaggle CLI in this job
+        if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
+        env:
+          KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
         run: python scripts/kaggle_auth.py --owner ffatty
-      - name: Preserve all existing Kaggle files, then publish a verified new version
+      - name: Safely update existing Kaggle version (when within staging budget)
+        if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
+        env:
+          MAX_MB: ${{ github.event_name == 'push' && '2500' || inputs.kaggle_stage_mb }}
         shell: bash
         run: |
           set -euo pipefail
