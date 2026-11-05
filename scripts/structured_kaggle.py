@@ -170,11 +170,45 @@ def mirror(repo: str, max_mb: int):
         meta["description"] = meta["description"].replace(
             "__REPO_URL__", "https://github.com/cheeseonamonkey/PlainTextWikipedia"
         ).replace("__UPSTREAM_URL__", "https://github.com/daveshap/PlainTextWikipedia")
+        meta["licenses"] = [{"name": "CC-BY-SA-4.0"}]
+        meta["subtitle"] = "Wikipedia article corpus · Parquet, searchable SQLite, original text"
         meta["description"] += (
-            "\n\nVersioned Parquet and compressed SQLite editions with independently "
-            "verified source SHA256 hashes; includes the original plaintext archives. "
-            "See structured-manifest.json and the maintained GitHub repository."
+            "\n\n## Choose a format\n"
+            "- **Parquet (.parquet)**: Zstandard-compressed, ready for pandas, "
+            "DuckDB and columnar analytics. Columns: `title`, `text`, "
+            "`source_file`, `source_ordinal`.\n"
+            "- **SQLite (.sqlite.zst)**: downloadable SQL database; decompress "
+            "with `zstd -d FILE.sqlite.zst`. Small shards include FTS5 search; "
+            "see their manifests for `fts5`.\n"
+            "- **Original (.txt.gz)**: retained verbatim. Each record uses title, "
+            "single-line text, blank line.\n\n"
+            "## Provenance and limitations\n"
+            "All structured files are verified against original source SHA256 "
+            "hashes. The `structured-manifest.json` file includes article "
+            "counts and checksums. These exports **do not preserve Wikipedia "
+            "page IDs**. Coverage can be partial; see the HF source build manifest "
+            "before asserting completeness.\n\n"
+            f"Source inventory: https://huggingface.co/datasets/{repo}\n"
+            "Source articles: Wikimedia contributors (CC BY-SA 4.0); "
+            "converter source: https://github.com/cheeseonamonkey/PlainTextWikipedia. "
+            "Observe Wikimedia attribution and share-alike requirements."
         )
+        def describe(file):
+            name = file.name
+            if name.endswith(".parquet"):
+                return "Columnar UTF-8 Wikipedia title/text, source archive and ordinal; zstd compressed."
+            if name.endswith(".sqlite.zst"):
+                return "Zstandard-compressed SQLite article database; inspect manifests for FTS5."
+            if name.endswith(".txt.gz"):
+                return "Original gzip plaintext archive; title, text, blank line per article."
+            if name == "structured-manifest.json":
+                return "Per-shard article counts, SHA256 digests, and exact source provenance."
+            return None
+        meta["resources"] = [
+            {"path": item.name, "description": desc}
+            for item in sorted(stage.iterdir())
+            if item.is_file() and (desc := describe(item))
+        ]
         (stage / "dataset-metadata.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         count = len([p for p in stage.iterdir() if p.is_file() and p.name != "dataset-metadata.json"])
