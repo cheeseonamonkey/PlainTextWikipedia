@@ -52,7 +52,7 @@ jobs:
       WANT_KAGGLE: ${{ github.event_name == 'push' || inputs.mirror_kaggle }}
     steps:
       - uses: actions/checkout@v4
-      - run: python -m pip install kaggle
+      - run: python -m pip install kaggle six
       - id: check
         shell: bash
         run: |
@@ -97,7 +97,7 @@ jobs:
 
       - name: Set up Kaggle CLI for existing dataset versions
         if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
-        run: python -m pip install kaggle
+        run: python -m pip install kaggle six
       - name: Authenticate Kaggle CLI in this job
         if: ${{ needs.kaggle-auth.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.mirror_kaggle) }}
         env:
