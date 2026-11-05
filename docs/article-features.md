@@ -111,7 +111,7 @@ model output, or partial encoding fail the job. fastText also fails by
 default if training fails; the `allow_lexical_only` switch exists only
 for explicit diagnostics and marks missing fastText components as unavailable.
 
-The signed-hash projection (seed 2026) and vector quantization are deterministic.
+The fastText random projection (seed 2026), BLAKE2s signed lexical hashing, and vector quantization are deterministic.
 Multi-threaded fastText training is stochastic; the released model and
 manifest are the reproducibility reference. Case folding can discard
 acronym/proper-name distinctions and does not guarantee faster Bekko
