@@ -228,13 +228,43 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     if not bucket.startswith("https://zenodo.org/api/files/") or not publish_url.startswith(url + "/"):
         raise RuntimeError("Unexpected Zenodo upload/publish endpoint")
     print(f"Zenodo draft {draft['id']} created: uploading verified Parquet only", flush=True)
-    # New-version drafts inherit old files. Zenodo requires deleting a file
-    # before replacing its bytes; only modify this unpublished draft.
-    for inherited in draft.get("files", []):
-        old = requests.delete(
-            f"{url}/{draft['id']}/files/{inherited['id']}",
-            headers=headers, timeout=30)
-        old.raise_for_status()
+    # Preserve completed draft uploads across retries. Older published versions
+    # can also carry unchanged Parquet files into the new draft.
+    old_files = {file["filename"]: file for file in draft.get("files", [])}
+    wanted = {Path(asset.path).name for asset in assets} | {"provenance.json"}
+
+    def remove_old(file):
+        response = requests.delete(f"{url}/{draft['id']}/files/{file['id']}",
+                                   headers=headers, timeout=30)
+        response.raise_for_status()
+
+    for name, file in old_files.items():
+        if name not in wanted:
+            remove_old(file)
+
+    def upload_verified(file: Path, timeout: int):
+        with file.open("rb") as stream:
+            md5 = hashlib.file_digest(stream, "md5").hexdigest()
+        prior_file = old_files.get(file.name)
+        if prior_file:
+            try:
+                same_size = int(prior_file.get("filesize", -1)) == file.stat().st_size
+            except (TypeError, ValueError):
+                same_size = False
+            checksum = (prior_file.get("checksum") or "").removeprefix("md5:")
+            if same_size and checksum.lower() == md5:
+                print(f"REUSED Zenodo draft file: {file.name}", flush=True)
+                return
+            remove_old(prior_file)
+        with file.open("rb") as stream:
+            response = requests.put(f"{bucket}/{file.name}", data=stream,
+                                    headers=headers, timeout=(30, timeout))
+        response.raise_for_status()
+        actual = response.json() if response.content else {}
+        remote_md5 = str(actual.get("checksum", "")).removeprefix("md5:")
+        if remote_md5 and remote_md5.lower() != md5:
+            raise ValueError(f"Zenodo returned a checksum mismatch for {file.name}")
+
     with tempfile.TemporaryDirectory(prefix="wiki-zenodo-") as tmp:
         root = Path(tmp)
         info = root / "provenance.json"
@@ -242,15 +272,9 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
         for index, asset in enumerate(assets, 1):
             with tempfile.TemporaryDirectory(dir=root) as folder:
                 source = fetch_verified(api, repo, asset, Path(folder))
-                with source.open("rb") as stream:
-                    response = requests.put(f"{bucket}/{source.name}", data=stream,
-                                            headers=headers, timeout=(30, 7200))
-                response.raise_for_status()
-            print(f"Uploaded {index}/{len(assets)}: {asset.path}", flush=True)
-        with info.open("rb") as stream:
-            response = requests.put(f"{bucket}/{info.name}", data=stream,
-                                    headers=headers, timeout=(30, 300))
-        response.raise_for_status()
+                upload_verified(source, 7200)
+            print(f"Processed {index}/{len(assets)}: {asset.path}", flush=True)
+        upload_verified(info, 300)
     published = requests.post(publish_url, headers=headers, timeout=90)
     published.raise_for_status()
     doc = published.json()
