@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Version existing Kaggle Wikipedia datasets with raw text and verified Parquet.
 
-Never replace Kaggle's current file set with a structured-only upload. Skip
-oversized editions rather than dropping raw archives or breaking a published URL.
+Keep the original archives and Parquet in every new dataset version, without
+carrying forward old generated SQLite files. Skip oversized editions rather
+than dropping raw archives or breaking existing dataset URLs.
 Run after Kaggle authentication and successful/partial HF structured exports.
 """
 
@@ -134,14 +135,31 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
             raise RuntimeError("Kaggle dataset download returned zero files")
         if any(p.is_dir() for p in stage.iterdir()):
             raise RuntimeError("Dataset contains directories; cannot safely flatten them")
+
+        # Keep previous dataset versions intact, but stop carrying obsolete
+        # generated SQLite artifacts into the current two-format release.
+        obsolete = [p for p in stage.iterdir() if p.is_file() and
+                    p.name.endswith((".sqlite", ".sqlite.zst", ".sqlite.json"))]
+        for file in obsolete:
+            file.unlink()
+        if obsolete:
+            print(f"Dropped {len(obsolete)} legacy SQLite files from new Kaggle version",
+                  flush=True)
+
         # A repeated CI run should not re-upload an identical Kaggle version.
         provenance = {"version": 1, "source": f"https://huggingface.co/datasets/{repo}",
                       "archives": manifests}
         old_provenance = stage / "structured-manifest.json"
         if old_provenance.exists():
             try:
-                if json.loads(old_provenance.read_text()) == provenance:
-                    print(f"SKIP {dataset}: already contains these exact verified exports")
+                if (not obsolete and json.loads(old_provenance.read_text()) == provenance
+                        and all((stage / Path(location).name).is_file()
+                                and (expected_bytes is None or
+                                     (stage / Path(location).name).stat().st_size ==
+                                     int(expected_bytes))
+                                and sha256(stage / Path(location).name) == digest
+                                for location, digest, expected_bytes in planned)):
+                    print(f"SKIP {dataset}: verified original + Parquet already current")
                     return
             except (OSError, ValueError):
                 pass
@@ -220,8 +238,9 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
         if count > 50:
             skip(f"{repo}: {count} files after preserving existing Kaggle data")
             return
-        print(f"Preserving {len(old_files)} old file(s); verifying {len(planned)} source "
-              f"and structured files to {dataset} ({total / 1048576:.0f} MiB)", flush=True)
+        print(f"Keeping {len(old_files) - len(obsolete)} prior file(s), "
+              f"verifying {len(planned)} original/Parquet files "
+              f"for {dataset} ({total / 1048576:.0f} MiB)", flush=True)
         run("version", "-p", str(stage), "-m",
             "Update verified Parquet and original Wikipedia text",
             "--dir-mode", "skip", "--keep-tabular")
