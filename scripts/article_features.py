@@ -37,15 +37,15 @@ except ModuleNotFoundError as exc:
         raise
     from repack_shards import records
 
-VERSION = 2
+VERSION = 3
 VOCAB_SIZE = 10_000
 TFIDF_SIZE = 5_000
 DENSE_DIMS = 200
 FASTTEXT_DIMS = 160
-FASTTEXT_PROJECTED_DIMS = 96
+FASTTEXT_PROJECTED_DIMS = 48
 BEKKO_DIMS = 128
-BEKKO_PROJECTED_DIMS = 64
-LEXICAL_DIMS = 32
+BEKKO_PROJECTED_DIMS = 128
+LEXICAL_DIMS = 16
 METRIC_DIMS = 8
 K1, B = 1.5, 0.75
 # Don't transliterate: those letters are necessary for multilingual text.
@@ -78,6 +78,13 @@ CSV_FIELDS = (
     "bekko_q8_b64", "bekko_scales_b64", "bekko_input_tokens",
     "bekko_truncated", "bekko_available",
     "semantic_available", "fasttext_training_tokens",
+    "effective_vocabulary", "normalized_entropy", "simpson_diversity",
+    "hapax_token_ratio", "rare_token_ratio", "rare_term_ratio",
+    "mean_term_frequency", "idf_std", "keyword_token_share",
+    "keyword_title_overlap", "title_tfidf_share", "bm15_mean",
+    "bm15_top5_share", "sentence_length_cv", "extractive_position",
+    "extractive_margin", "lead_keyword_overlap", "vector_quant_cosine",
+    "vector_active_fraction", "fusion_component_energy_json",
 )
 
 
@@ -162,7 +169,9 @@ def lexical_hash(scores: list[tuple[int, float]]) -> np.ndarray:
     for term_id, score in scores:
         digest = hashlib.blake2s(str(term_id).encode(), digest_size=4).digest()
         slot = int.from_bytes(digest, "little") % LEXICAL_DIMS
-        sign = -1 if digest[0] & 1 else 1
+        # Slot uses digest[0] low bits; using that byte's parity for
+        # sign makes half the buckets *always* negative. Keep independent.
+        sign = -1 if digest[3] & 1 else 1
         arr[slot] += sign * score
     return norm(arr)
 
@@ -173,20 +182,50 @@ FASTTEXT_PROJECTION = (np.random.default_rng(2026).choice(
     .astype(np.float32) / math.sqrt(FASTTEXT_PROJECTED_DIMS))
 
 
+# Fractions of *cosine similarity* attributable to each independent subspace,
+# not raw amplitude multipliers. Squared amplitudes determine dot-product share.
+FUSION_IMPORTANCE = {
+    "bekko": 0.55, "fasttext": 0.40,
+    "lexical": 0.03, "metrics": 0.02,
+}
+
+
+def combined_vector(semantic: np.ndarray | None, lexical: np.ndarray,
+                    metrics: list[float], bekko: np.ndarray
+                    ) -> tuple[np.ndarray, dict[str, float]]:
+    """Keep all 128 Bekko dims; randomly project fastText 160->48.
+
+    Concatenating L2-normalized orthogonal subspaces weighted by sqrt(p)
+    gives each component its prescribed contribution to cosine similarity.
+    """
+    if len(metrics) != METRIC_DIMS or bekko.shape != (BEKKO_DIMS,) or lexical.shape != (LEXICAL_DIMS,):
+        raise ValueError("Invalid mixed-vector inputs")
+    fasttext = (norm(np.asarray(semantic, dtype=np.float32) @ FASTTEXT_PROJECTION)
+                if semantic is not None else np.zeros(FASTTEXT_PROJECTED_DIMS, np.float32))
+    centered_metrics = (np.asarray(metrics, dtype=np.float32) - 0.5) * 2
+    blocks = {
+        "bekko": norm(np.asarray(bekko, dtype=np.float32)),
+        "fasttext": fasttext,
+        "lexical": norm(np.asarray(lexical, dtype=np.float32)),
+        "metrics": norm(centered_metrics),
+    }
+    if any(not np.isfinite(values).all() for values in blocks.values()):
+        raise ValueError("Non-finite embedding component")
+    weighted = {key: values * math.sqrt(FUSION_IMPORTANCE[key])
+                for key, values in blocks.items()}
+    values = np.concatenate([weighted[key] for key in ("bekko", "fasttext", "lexical", "metrics")])
+    if values.size != DENSE_DIMS:
+        raise RuntimeError("Invalid combined vector shape")
+    energy = {key: float(np.dot(value, value)) for key, value in weighted.items()}
+    total = sum(energy.values())
+    return norm(values), ({key: amount / total if total else 0.
+                           for key, amount in energy.items()})
+
+
 def vectorize(semantic: np.ndarray | None, lexical: np.ndarray,
               metrics: list[float], bekko: np.ndarray) -> tuple[str, str]:
-    """160D fastText -> 96D, plus 64D Bekko, 32D TF-IDF, 8D metrics."""
-    if len(metrics) != METRIC_DIMS or bekko.shape != (BEKKO_DIMS,):
-        raise ValueError("Invalid mixed-vector inputs")
-    semantic96 = (norm(semantic.astype(np.float32) @ FASTTEXT_PROJECTION)
-                  if semantic is not None else np.zeros(FASTTEXT_PROJECTED_DIMS, np.float32))
-    parts = np.concatenate((semantic96 * .68,
-                            norm(bekko[:BEKKO_PROJECTED_DIMS].astype(np.float32)) * .22,
-                            lexical * .08,
-                            np.asarray(metrics, dtype=np.float32) * .02))
-    if len(parts) != DENSE_DIMS:
-        raise RuntimeError("Invalid combined vector shape")
-    return quantize(norm(parts))
+    vector, _ = combined_vector(semantic, lexical, metrics, bekko)
+    return quantize(vector)
 
 
 def source_articles(files: list[Path]):
@@ -347,6 +386,9 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
     total = max(1, length)
     hapax = sum(c == 1 for c in counts.values())
     entropy = -sum((n / total) * math.log(n / total) for n in counts.values()) if length else 0.
+    normalized_entropy = entropy / math.log(distinct) if distinct > 1 else 0.
+    simpson_diversity = (1. - sum(n * n for n in counts.values()) / (total * total)
+                         if length else 0.)
     # Only retain vocabulary word counts in the CSV; the SQLite counts BLOB
     # preserves *all* intermediary terms, including terms outside top 10K.
     known = {term: count for term, count in counts.items() if term in vocabulary_lookup}
@@ -387,8 +429,21 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
                      if tfidf_sum else 0.0)
     tfidf_entropy = (-sum((v / tfidf_sum) * math.log(v / tfidf_sum)
                           for _, v, _ in weighted) if tfidf_sum else 0.0)
+    known_tokens = sum(known.values())
     mean_idf = (sum(vocabulary_lookup[t][2] * n for t, n in known.items()) /
-                max(1, sum(known.values())))
+                max(1, known_tokens))
+    idf_std = math.sqrt(sum(n * (vocabulary_lookup[t][2] - mean_idf) ** 2
+                            for t, n in known.items()) / max(1, known_tokens))
+    rare = [(term, count) for term, count in known.items()
+            if vocabulary_lookup[term][1] / docs <= .05]
+    rare_token_ratio = sum(count for _, count in rare) / total
+    rare_term_ratio = len(rare) / max(1, len(known))
+    keyword_terms = {term for _, _, term in top}
+    keyword_token_share = sum(counts[term] for term in keyword_terms) / total
+    keyword_title_overlap = len(title_terms & keyword_terms) / max(1, len(keyword_terms))
+    title_tfidf_share = (sum(score for _, score, term in weighted if term in title_terms)
+                         / tfidf_sum if tfidf_sum else 0.)
+    bm15_top5_share = sum(score for _, score, _ in bmweighted[:5]) / max(1e-9, bm_sum)
     title_overlap = len(title_terms.intersection(known)) / max(1, len(title_terms))
     mean_token_chars = sum(len(term) * n for term, n in counts.items()) / total
     repetition = max(counts.values(), default=0) / total
@@ -402,7 +457,12 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
         title_overlap,
         min(1., entropy / 10),
     ]
-    encoded, scales = vectorize(semantic, lexical, scalar, bekko_embedding)
+    mixed, energy = combined_vector(semantic, lexical, scalar, bekko_embedding)
+    encoded, scales = quantize(mixed)
+    decoded = dequantize(encoded, scales)
+    decoded_length = float(np.linalg.norm(decoded))
+    vector_quant_cosine = (float(np.dot(mixed, decoded)) / decoded_length
+                           if decoded_length > 1e-9 else 1.)
     fasttext_encoded, fasttext_scales = quantize(
         norm(semantic) if semantic is not None
         else np.zeros(FASTTEXT_DIMS, np.float32))
@@ -410,20 +470,38 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
     # Salient extractive sentence: the highest-scoring sentence among a bounded
     # set, not a language-model summary; empty without stored body.
     topweights = {t: v for _, v, t in weighted}
-    lead_relevance = 0.
+    lead_relevance = lead_keyword_overlap = sentence_length_cv = 0.
+    extractive_position = extractive_margin = 0.
     representative = ""
     if body:
         parts = [piece.strip() for piece in SENTENCES.split(body) if piece.strip()][:80]
-        best_score = -1.
+        best_score = second_score = -1.
+        best_position = 0
+        sentence_tokens_sum = sentence_tokens_sq = 0
         for pos, sentence in enumerate(parts):
             piece_tokens = tokens(sentence[:1200])
+            count = len(piece_tokens)
+            sentence_tokens_sum += count
+            sentence_tokens_sq += count * count
             score = sum(topweights.get(word, 0.) for word in piece_tokens[:160])
-            score /= math.sqrt(max(1, len(piece_tokens)))
+            score /= math.sqrt(max(1, count))
             if pos == 0:
                 lead_relevance = score
+                lead_keyword_overlap = len(set(piece_tokens) & keyword_terms) / max(1, len(keyword_terms))
             if score > best_score:
-                best_score = score
+                second_score, best_score = best_score, score
+                best_position = pos
                 representative = sentence[:320]
+            elif score > second_score:
+                second_score = score
+        count = len(parts)
+        mean_sentence_tokens = sentence_tokens_sum / max(1, count)
+        if mean_sentence_tokens:
+            variance = max(0., sentence_tokens_sq / count - mean_sentence_tokens ** 2)
+            sentence_length_cv = math.sqrt(variance) / mean_sentence_tokens
+        extractive_position = best_position / max(1, count - 1)
+        if best_score > 0:
+            extractive_margin = max(0., best_score - max(0., second_score)) / best_score
     saliency = top[0][1] / max(1e-9, sum(v for _, v, _ in weighted)) if top else 0.
     result = {
         "source_file": source_file, "source_ordinal": ordinal, "title": title,
@@ -458,6 +536,27 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
         "bekko_available": 1,
         "semantic_available": int(fasttext_vectors is not None),
         "fasttext_training_tokens": training_tokens,
+        "effective_vocabulary": math.exp(entropy) if length else 0.,
+        "normalized_entropy": normalized_entropy,
+        "simpson_diversity": simpson_diversity,
+        "hapax_token_ratio": hapax / total,
+        "rare_token_ratio": rare_token_ratio,
+        "rare_term_ratio": rare_term_ratio,
+        "mean_term_frequency": length / max(1, distinct),
+        "idf_std": idf_std,
+        "keyword_token_share": keyword_token_share,
+        "keyword_title_overlap": keyword_title_overlap,
+        "title_tfidf_share": title_tfidf_share,
+        "bm15_mean": bm_sum / max(1, len(bmweighted)),
+        "bm15_top5_share": bm15_top5_share,
+        "sentence_length_cv": sentence_length_cv,
+        "extractive_position": extractive_position,
+        "extractive_margin": extractive_margin,
+        "lead_keyword_overlap": lead_keyword_overlap,
+        "vector_quant_cosine": vector_quant_cosine,
+        "vector_active_fraction": float(np.mean(np.abs(mixed) > .01)),
+        "fusion_component_energy_json": compact({key: round(value, 6)
+                                                  for key, value in energy.items()}),
     }
     return result
 
@@ -589,9 +688,12 @@ def build(files: list[Path], output: Path, code: str, *,
                           "input": "NFKC+casefold title and bounded lead excerpt",
                           "required": True},
                 "vector": {"dimensions": DENSE_DIMS,
-                           "components": {"fasttext_projected": 96, "bekko": 64,
-                                          "signed_tfidf_hash": 32, "document_metrics": 8},
-                           "weighting": [0.68, 0.22, 0.08, 0.02],
+                           "components": {"bekko": 128, "fasttext_projected": 48,
+                                          "signed_tfidf_hash": 16, "document_metrics": 8},
+                           "importance": FUSION_IMPORTANCE,
+                           "weighting": "sqrt(importance) per individually L2-normalized subspace",
+                           "projection_seed": 2026,
+                           "centered_metrics": True,
                            "quantization": "symmetric_int8_per_32_float16_scale",
                            "byte_order": "little",
                            "column": "vector_q8_b64", "scales": "vector_scales_b64"},

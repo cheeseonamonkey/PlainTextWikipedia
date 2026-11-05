@@ -53,6 +53,10 @@ complete 5K sparse TF-IDF and BM15 score arrays as JSON cells.
 | Distribution | stopword_ratio, oov_or_filtered_ratio, digit_ratio, punctuation_ratio, vocab_coverage, tfidf_coverage |
 | Importance | mean_idf, max_tfidf, tfidf_l2, tfidf_top5_share, tfidf_entropy, bm15_sum, bm15_max |
 | Extractive | saliency, title_overlap, lead_relevance, representative_sentence, keywords_json |
+| Additional diversity/rarity | effective_vocabulary, normalized_entropy, simpson_diversity, hapax_token_ratio, rare_token_ratio, rare_term_ratio, mean_term_frequency, idf_std |
+| Additional topical / BM15 | keyword_token_share, keyword_title_overlap, title_tfidf_share, bm15_mean, bm15_top5_share |
+| Sentence diagnostics | sentence_length_cv, extractive_position, extractive_margin, lead_keyword_overlap |
+| Fusion diagnostics | vector_quant_cosine, vector_active_fraction, fusion_component_energy_json |
 | Intermediate | word_counts_json, tfidf_sparse_json, bm15_sparse_json |
 | Embedding | vector_q8_b64, vector_scales_b64; fasttext_q8_b64, fasttext_scales_b64; bekko_q8_b64, bekko_scales_b64; bekko_input_tokens, bekko_truncated, bekko_available, semantic_available, fasttext_training_tokens |
 
@@ -81,10 +85,17 @@ article-level embedding; fastText training alone uses bounded sampling.
   Transformer representation. The entire article still contributes to
   TF-IDF, all word counts, metrics and fastText pooling. Record the
   Bekko input token count and whether the excerpt was truncated.
-- **200D mixed vector:** deterministic signed projection of 160D fastText
-  down to 96D; first 64D of Bekko's Matryoshka representation;
-  32D signed hash of TF-IDF; eight scalar article metrics.
-  Weighted 0.68 / 0.22 / 0.08 / 0.02 and L2 normalized.
+- **200D mixed vector (v3):** preserve **all 128D Bekko**, randomly
+  project the 160D fastText vector into 48D, signed-hash the selected
+  TF-IDF into 16D, and add eight centered article-level metrics.
+- **Importance weights for cosine similarity:** Bekko 55%, fastText 40%,
+  TF-IDF 3%, scalar metrics 2%. Normalize each block independently,
+  multiply it by the square root of its target contribution, concatenate,
+  then L2 normalize. The published vector stores per-article realized
+  component energy in `fusion_component_energy_json`, including any
+  absent/zero blocks. These weights are design defaults, **not benchmark-tuned**.
+- Signed hashing now uses independent bucket/sign bits to avoid a bias
+  that previously forced even and odd hash buckets to fixed signs.
 
 Both standalone embeddings and the combined representation are saved.
 The 128D Bekko vectors can be compared *across languages* approximately;
@@ -100,7 +111,7 @@ model output, or partial encoding fail the job. fastText also fails by
 default if training fails; the `allow_lexical_only` switch exists only
 for explicit diagnostics and marks missing fastText components as unavailable.
 
-The signed-hash projection and vector quantization are deterministic.
+The fastText random projection (seed 2026), BLAKE2s signed lexical hashing, and vector quantization are deterministic.
 Multi-threaded fastText training is stochastic; the released model and
 manifest are the reproducibility reference. Case folding can discard
 acronym/proper-name distinctions and does not guarantee faster Bekko
