@@ -210,9 +210,11 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
             if target.is_file() and (expected_bytes is None
                     or target.stat().st_size == int(expected_bytes)) and sha256(target) == digest:
                 continue  # Preserve already identical Kaggle files, avoiding HF downloads.
+            # Keep the verified Hub blob in the runner's shared cache.
+            # Zenodo runs later in this same job and can reuse it without
+            # downloading the Parquet file from HF again.
             source = Path(hf_hub_download(repo, filename=location,
-                                         repo_type="dataset", token=api.token,
-                                         local_dir=root / "hf"))
+                                         repo_type="dataset", token=api.token))
             if sha256(source) != digest:
                 raise RuntimeError(f"SHA256 mismatch for {location}")
             if expected_bytes is not None and source.stat().st_size != int(expected_bytes):
