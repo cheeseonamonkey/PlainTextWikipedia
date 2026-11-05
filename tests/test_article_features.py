@@ -120,12 +120,13 @@ class ArticleFeaturesTests(unittest.TestCase):
             ("planets orbit stars and moons orbit planets in space\n" * 256),
             encoding="utf-8")
         output = self.root / "small-model.bin"
-        subprocess.run(
+        result = subprocess.run(
             [sys.executable, str(Path(__file__).resolve().parents[1] /
                                   "scripts/article_features.py"),
              "_train", str(corpus), str(output), "16", "1"],
-            check=True, timeout=55, capture_output=True,
+            check=False, timeout=55, capture_output=True, text=True,
         )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         model = fasttext.load_model(str(output))
         self.assertEqual(model.get_dimension(), 16)
         self.assertEqual(len(model.get_word_vector("orbit")), 16)
