@@ -70,6 +70,15 @@ runner's disk. Large editions fail explicitly when staging would exhaust actual 
 disk. A larger runner or external worker may be needed; raw files are never
 discarded to fake a successful Kaggle version.
 
+**Performance:** Kaggle and Zenodo reuse downloaded HF Parquet blobs
+within the same runner instead of each downloading an identical artifact.
+Parquet conversion caps working batches at 16,384 articles **and 32 MiB**
+of decoded text to avoid oversized-memory row groups. New Parquet manifests
+record SHA256 plus a Zenodo-compatible MD5 from a single file scan; matching
+draft files can be skipped without downloading. Per-language Actions job
+summaries report wall time by publisher, so optimize based on real bottlenecks
+after the `simple,en` test rather than estimated percentages.
+
 **Reruns:** Source/artifact SHA256 manifests allow successful HF shards,
 unchanged Kaggle datasets, and unchanged Zenodo records to skip redundant work.
 Use `languages` to retry only failures (e.g. `en,sh`).
