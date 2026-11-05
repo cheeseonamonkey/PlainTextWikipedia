@@ -48,6 +48,30 @@ class ReusableWorkflowTests(unittest.TestCase):
             self.assertEqual(form["publish_zenodo"]["default"], "true")
 
 
+class WikipediaArticleLinksTests(unittest.TestCase):
+    def test_catalog_and_primary_repos_have_wikipedia_domains(self):
+        import json
+        from scripts.wiki_metadata import ROOT, SIMPLE, wiki_code
+
+        self.assertEqual(wiki_code(SIMPLE), "simple")
+        catalog = json.loads((ROOT / "config/additional-languages.json").read_text())
+        self.assertGreaterEqual(len(catalog["languages"]), 200)
+        for language in catalog["languages"]:
+            with self.subTest(slug=language["slug"]):
+                repo = f"ffatty/plaintext-wikipedia-full-{language['slug']}"
+                self.assertEqual(wiki_code(repo),
+                                 language["project"].removesuffix("wiki"))
+        for slug, code in (("english", "en"), ("german", "de"),
+                           ("spanish", "es"), ("french", "fr"),
+                           ("norwegian", "no"), ("chinese", "zh"),
+                           ("italian", "it"), ("russian", "ru"),
+                           ("portuguese", "pt")):
+            with self.subTest(slug=slug):
+                self.assertEqual(wiki_code(f"ffatty/plaintext-wikipedia-full-{slug}"),
+                                 code)
+        with self.assertRaisesRegex(ValueError, "No Wikimedia project mapping"):
+            wiki_code("ffatty/plaintext-wikipedia-full-not-published")
+
 class PreflightTests(unittest.TestCase):
     def test_optional_publishers_are_never_touched_when_disabled(self):
         with (patch.dict(os.environ, {"HF_TOKEN": "test"}, clear=True),
