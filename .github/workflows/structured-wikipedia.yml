@@ -22,6 +22,10 @@ on:
         description: Publish beside existing raw files on Hugging Face
         type: boolean
         default: true
+      mirror_kaggle:
+        description: Mirror verified outputs into the existing Simple English Kaggle dataset
+        type: boolean
+        default: false
   push:
     branches: [main]
     paths:
@@ -138,3 +142,102 @@ jobs:
       - name: Free runner disk
         if: always()
         run: rm -rf source build
+
+  kaggle-simple:
+    needs: export
+    if: ${{ needs.export.result == 'success' && (github.event_name == 'push' || (inputs.publish && inputs.mirror_kaggle && inputs.repo_id == 'ffatty/plain-text-wikipedia-simpleenglish')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install huggingface_hub kaggle
+      - name: Authenticate Kaggle if configured
+        id: auth
+        shell: bash
+        run: |
+          if [[ -z "$KAGGLE_TOKEN" ]]; then
+            echo "::warning::KAGGLE_TOKEN not configured; HF published, Kaggle mirror skipped"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            python scripts/kaggle_auth.py --owner ffatty
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Stage complete Kaggle dataset and verified new formats
+        if: steps.auth.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p kaggle-publish
+          kaggle datasets download -d ffatty/plain-text-wikipedia-simpleenglish -p kaggle-publish --unzip
+          python - <<'PY'
+          import hashlib, json, os, shutil
+          from pathlib import Path
+          from huggingface_hub import HfApi, hf_hub_download
+
+          repo = 'ffatty/plain-text-wikipedia-simpleenglish'
+          token = os.getenv('HF_TOKEN') or None
+          remote = set(HfApi(token=token).list_repo_files(repo, repo_type='dataset'))
+          stage = Path('kaggle-publish')
+          raw = 'data/simplewiki_01_of_01.txt.gz'
+          source = Path(hf_hub_download(repo, raw, repo_type='dataset', token=token))
+          with source.open('rb') as inp:
+              digest = hashlib.file_digest(inp, 'sha256').hexdigest()
+          shutil.copyfile(source, stage / Path(raw).name)
+
+          # Clear only prior generated outputs; preserve every other Kaggle file.
+          for name in ('simplewiki_01_of_01.parquet', 'simplewiki_01_of_01.sqlite.zst',
+                       'simplewiki_01_of_01.parquet.json', 'simplewiki_01_of_01.sqlite.json'):
+              (stage / name).unlink(missing_ok=True)
+          found = []
+          for kind in ('parquet', 'sqlite'):
+              manifest_name = f'structured/manifests/simplewiki_01_of_01.{kind}.json'
+              if manifest_name not in remote:
+                  continue
+              manifest_file = Path(hf_hub_download(repo, manifest_name,
+                                                   repo_type='dataset', token=token))
+              manifest = json.loads(manifest_file.read_text(encoding='utf-8'))
+              if manifest['source_sha256'] != digest:
+                  print(f'::warning::{kind} export source checksum is stale; skipping', flush=True)
+                  continue
+              artifact = manifest['artifacts'][kind]
+              remote_file = 'structured/' + artifact['path']
+              if remote_file not in remote:
+                  raise RuntimeError(f'Missing structured artifact: {remote_file}')
+              local = Path(hf_hub_download(repo, remote_file, repo_type='dataset', token=token))
+              with local.open('rb') as stream:
+                  actual = hashlib.file_digest(stream, 'sha256').hexdigest()
+              if actual != artifact['sha256']:
+                  raise RuntimeError(f'SHA256 verification failed: {remote_file}')
+              shutil.copyfile(local, stage / Path(remote_file).name)
+              shutil.copyfile(manifest_file, stage / Path(manifest_name).name)
+              found.append(kind)
+          if not found:
+              raise RuntimeError('No current verified structured formats found')
+          metadata = json.loads(Path('kaggle-metadata.json').read_text(encoding='utf-8'))
+          metadata['description'] += (
+              '\n\nStructured editions: ' + ', '.join(found) +
+              '. Manifests include raw source SHA256 and record counts. '
+              'SQLite assets are Zstandard-compressed, with optional FTS5 indexing.'
+          )
+          (stage / 'dataset-metadata.json').write_text(
+              json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
+          )
+          print('Ready to version Kaggle with original files and ' + ', '.join(found))
+          PY
+      - name: Publish new version to the existing Simple English Kaggle dataset
+        if: steps.auth.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          kaggle datasets version -p kaggle-publish \
+            -m "Add Parquet and SQLite structured Wikipedia editions" --dir-mode skip
+          echo "Published https://www.kaggle.com/datasets/ffatty/plain-text-wikipedia-simpleenglish"
+      - name: Free runner disk
+        if: always()
+        run: rm -rf kaggle-publish
