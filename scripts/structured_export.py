@@ -31,19 +31,22 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def batches(source: Path, size: int):
-    batch = []
+def batches(source: Path, size: int, max_bytes: int = 32 * 1024 * 1024):
+    """Bound both rows and decoded article bytes to avoid large-shard OOMs."""
+    batch, batch_bytes = [], 0
     for ordinal, record in enumerate(records(source), 1):
         raw_title, raw_text, _ = record.split(b"\n", 2)
+        row_bytes = len(raw_title) + len(raw_text)
+        if batch and (len(batch) >= size or batch_bytes + row_bytes > max_bytes):
+            yield batch
+            batch, batch_bytes = [], 0
         batch.append((
             raw_title.removesuffix(b"\r").decode("utf-8"),
             raw_text.removesuffix(b"\r").decode("utf-8"),
             source.name,
             ordinal,
         ))
-        if len(batch) == size:
-            yield batch
-            batch = []
+        batch_bytes += row_bytes
     if batch:
         yield batch
 
@@ -82,7 +85,7 @@ def finish_sqlite(db: sqlite3.Connection, count: int, fts: bool) -> None:
 
 
 def export(source: Path, destination: Path, format: str = "parquet",
-           fts: bool = False, batch_size: int = 16384) -> dict:
+           fts: bool = False, batch_size: int = 16384, batch_max_mb: int = 32) -> dict:
     if not source.is_file() or not source.name.endswith(".txt.gz"):
         raise ValueError("Source must be an existing *.txt.gz article archive")
     if format not in ("parquet", "sqlite", "both"):
@@ -91,6 +94,8 @@ def export(source: Path, destination: Path, format: str = "parquet",
         raise ValueError("FTS5 requires SQLite output")
     if not 1 <= batch_size <= 65536:
         raise ValueError("batch_size must be in [1, 65536]")
+    if not 1 <= batch_max_mb <= 512:
+        raise ValueError("batch_max_mb must be in [1, 512]")
 
     want_parquet = format in ("parquet", "both")
     want_sqlite = format in ("sqlite", "both")
@@ -123,7 +128,7 @@ def export(source: Path, destination: Path, format: str = "parquet",
             if want_sqlite:
                 db = open_sqlite(sqlite_path)
 
-            for batch in batches(source, batch_size):
+            for batch in batches(source, batch_size, batch_max_mb * 1024 * 1024):
                 if writer is not None:
                     columns = dict(zip(FIELDS, zip(*batch)))
                     table = pa.table(columns, schema=schema)
@@ -212,8 +217,11 @@ def main() -> None:
     parser.add_argument("--format", choices=("parquet", "sqlite", "both"), default="parquet")
     parser.add_argument("--fts", action="store_true", help="Build optional SQLite FTS5 index")
     parser.add_argument("--batch-size", type=int, default=16384)
+    parser.add_argument("--batch-max-mb", type=int, default=32,
+                        help="Cap decoded article bytes per batch to reduce memory usage")
     args = parser.parse_args()
-    result = export(args.source, args.destination, args.format, args.fts, args.batch_size)
+    result = export(args.source, args.destination, args.format, args.fts,
+                    args.batch_size, args.batch_max_mb)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
