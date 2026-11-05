@@ -57,8 +57,10 @@ class StructuredExportTests(unittest.TestCase):
             )
             self.assertEqual(db.execute("PRAGMA quick_check").fetchone()[0], "ok")
 
-        meta = json.loads((dest / "manifests" / "simplewiki_01_of_01.json").read_text())
-        self.assertEqual(meta, info)
+        for kind in ("parquet", "sqlite"):
+            meta = json.loads((dest / "manifests" / f"simplewiki_01_of_01.{kind}.json").read_text())
+            self.assertEqual(meta["source_sha256"], info["source_sha256"])
+            self.assertEqual(meta["artifacts"], {kind: info["artifacts"][kind]})
 
     def test_sqlite_without_fts(self):
         import zstandard as zstd
