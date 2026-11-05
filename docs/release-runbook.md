@@ -132,7 +132,7 @@ coherent Kaggle dataset.
 
 ## Data contract
 
-Parquet columns: `title`, `text`, `source_file`, `source_ordinal`.
+Parquet v2 columns: `title`, `text`, `source_file`, `source_ordinal`, `char_count`, `byte_count`, `word_count`, `article_url`. The text counts are per-article; word count is whitespace-based, not multilingual tokenization. Article links are best-effort (not canonical or validated). The first post-upgrade export rebuilds v1 Parquet once.
 The ordinal is one-based within its gzip input; **it is not a Wikipedia page ID**.
 Some source recoveries are partial. Check the `data/build-manifest.json` coverage
 flags before claiming complete corpora. Article content is from Wikimedia
