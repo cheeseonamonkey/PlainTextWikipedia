@@ -117,9 +117,10 @@ def limits(assets: list[Asset]):
 
 
 def fetch_verified(api: HfApi, repo: str, asset: Asset, directory: Path) -> Path:
+    # Use the standard HF cache rather than an isolated temporary local_dir.
+    # The preceding Kaggle step may already have downloaded this exact blob.
     path = Path(hf_hub_download(repo_id=repo, filename=asset.path,
-                                repo_type="dataset", token=api.token,
-                                local_dir=directory))
+                                repo_type="dataset", token=api.token))
     if path.stat().st_size != asset.size or sha256(path) != asset.sha256:
         raise ValueError(f"SHA256/size mismatch: {asset.path}")
     return path
