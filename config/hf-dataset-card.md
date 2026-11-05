@@ -47,13 +47,15 @@ The `structured/` directory contains **independently verified** additions to the
 Parquet columns: `title` (string), `text` (string), `source_file` (string), `source_ordinal` (int64; 1-based within its source archive). **Original Wikipedia page IDs are not retained.** SQLite stores the same values and adds an article ID local to that file.
 
 ```python
-from huggingface_hub import hf_hub_download
+from huggingface_hub import HfApi, hf_hub_download
 import pyarrow.parquet as pq
 
-path = hf_hub_download(
-    "__HF_REPO__", "structured/parquet/__LANG_PROJECT___01_of_01.parquet",
-    repo_type="dataset",
-)  # Replace the filename with a published entry from structured/parquet/.
+repo = "__HF_REPO__"
+files = sorted(path for path in HfApi().list_repo_files(repo, repo_type="dataset")
+               if path.startswith("structured/parquet/") and path.endswith(".parquet"))
+if not files:
+    raise RuntimeError("No Parquet editions published yet")
+path = hf_hub_download(repo, filename=files[0], repo_type="dataset")
 print(pq.read_table(path, columns=["title", "text"]).slice(0, 3))
 ```
 
