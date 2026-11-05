@@ -82,7 +82,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install CPU-only dependencies
-        run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel
+        run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1
       - name: Build/skip and optionally publish full language feature set
         shell: bash
         run: |
