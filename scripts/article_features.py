@@ -584,7 +584,7 @@ def main():
     args = p.parse_args()
     if args.sources and args.sources[0].name == "_train":
         train_fasttext_worker(Path(args.sources[1]), Path(args.sources[2]),
-                              int(args.sources[3]), int(args.sources[4]))
+                              int(str(args.sources[3])), int(str(args.sources[4])))
         return
     if not args.sources:
         p.error("At least one source .txt.gz required")
