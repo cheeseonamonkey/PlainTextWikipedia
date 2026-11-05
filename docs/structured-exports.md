@@ -33,8 +33,9 @@ before claiming full edition coverage.
   public data. Oversized editions fail explicitly instead of discarding files.
 - Zenodo receives **Parquet only**, plus a provenance manifest.
 
-No workflow creates new SQLite databases or FTS5 indexes. Older SQLite
-downloads are left available where already published. The low-level
+No workflow creates new SQLite databases or FTS5 indexes. Older SQLite assets remain available on Hugging Face where previously published;
+new Kaggle versions omit legacy SQLite while previous Kaggle versions
+remain available for download. The low-level
 `scripts/structured_export.py` still supports SQLite for historical consumers
 and test compatibility; release jobs use Parquet only.
 
