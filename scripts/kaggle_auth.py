@@ -92,6 +92,22 @@ def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> s
             env=clean, capture_output=True, text=True, timeout=90, check=False,
         )
         if result.returncode != 0:
+            # Dependency/import failures and transient service errors do NOT
+            # establish bad credentials. Surface these separately.
+            diagnostics = (result.stderr + "\n" + result.stdout).lower()
+            if "modulenotfounderror" in diagnostics or "importerror" in diagnostics:
+                raise RuntimeError(
+                    "Kaggle CLI could not import its dependencies (install kaggle and six); "
+                    "credentials were not tested"
+                )
+            if any(marker in diagnostics for marker in
+                   ("timed out", "timeouterror", "connectionerror",
+                    "too many requests", "http 429", "http 502", "http 503",
+                    "http 504", "bad gateway", "service unavailable")):
+                raise RuntimeError(
+                    "Kaggle API/network unavailable during credential probe; "
+                    "credentials were not proven invalid"
+                )
             print(f"::warning::Kaggle authentication mode {mode} rejected",
                   file=sys.stderr, flush=True)
             continue
