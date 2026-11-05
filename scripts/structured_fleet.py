@@ -153,7 +153,7 @@ def language_aliases(repos: list[str]) -> dict[str, set[str]]:
     # Main language repos use these existing publication settings, rather
     # than entries in additional-languages.json.
     for line in (config / "datasets.env").read_text(encoding="utf-8").splitlines():
-        match = re.fullmatch(r"FULL_HF_REPO_([A-Z_]+)=(ffatty/[^\\s#]+)", line.strip())
+        match = re.fullmatch(r"FULL_HF_REPO_([A-Z_]+)=(ffatty/[^\s#]+)", line.strip())
         if match:
             code, repo = match.groups()
             add(code.lower(), repo)
