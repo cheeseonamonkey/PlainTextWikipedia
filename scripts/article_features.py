@@ -24,6 +24,7 @@ import tempfile
 import unicodedata
 import zlib
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -96,6 +97,19 @@ def tokens(text: str) -> list[str]:
         else:
             result.append(word)
     return result
+
+
+@lru_cache(maxsize=256)
+def language_stopwords(code: str) -> frozenset[str]:
+    """Aggressive multilingual lists where available, plus corpus high-df stopwords."""
+    words = set(EN_STOP) if code in {"en", "simple"} else set()
+    try:
+        from stopwordsiso import stopwords
+    except ImportError:
+        return frozenset(words)
+    iso = "en" if code == "simple" else code.split("_", 1)[0].split("-", 1)[0]
+    words.update(fold(term) for term in stopwords(iso))
+    return frozenset(words)
 
 
 def idf(docs: int, df: int) -> float:
@@ -252,11 +266,11 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
 def vocabulary(db, documents: int, code: str, limit: int, shortlist: int):
     # High-df terms function as language-specific stopwords; English also has
     # a small fixed function-word list. Corpus-specific filtering is reproducible.
-    english = EN_STOP if code in {"en", "simple"} else set()
+    blocked = language_stopwords(code)
     ordered = db.execute("SELECT term,tf,df FROM terms ORDER BY tf DESC, term LIMIT ?", (max(limit * 15, 25000),))
     selected = []
     for term, tf, df in ordered:
-        if (term in english or df > max(1, documents * .80)
+        if (term in blocked or df > max(1, documents * .80)
                 or not term.strip("-'") or len(term) > 64
                 or not any(ch.isalpha() for ch in term)):
             continue
@@ -456,7 +470,7 @@ def build(files: list[Path], output: Path, code: str, *,
             entries = vocabulary(db, totals["articles"], code, vocab_size, shortlist)
             lookup = {term: (index, df, value_idf, enabled)
                       for index, term, _, df, value_idf, enabled in entries}
-            stopwords = (EN_STOP if code in {"en", "simple"} else set()).union(
+            stopwords = set(language_stopwords(code)).union(
                 term for (term,) in db.execute(
                     "SELECT term FROM terms WHERE df > ?", (totals["articles"] * .80,)))
             model, reason = train_fasttext(training, model_path, totals["train_tokens"],
@@ -529,7 +543,9 @@ def build(files: list[Path], output: Path, code: str, *,
                            "byte_order": "little",
                            "column": "vector_q8_b64", "scales": "vector_scales_b64"},
                 "lexical": {"normalization": "NFKC+casefold+common_quote_dash_fold",
-                            "max_df_ratio": 0.8, "idf": "ln((N+1)/(df+1))+1",
+                            "max_df_ratio": 0.8,
+                            "stopwords": "stopwordsiso (if installed) + English defaults + high-df filtering",
+                            "idf": "ln((N+1)/(df+1))+1",
                             "bm15": {"k1": K1, "b": B},
                             "fts5": fts5,
                             "word_counts": "full counts stored as zlib JSON per article in SQLite; 10K projected counts in CSV"},
