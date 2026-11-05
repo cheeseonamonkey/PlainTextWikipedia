@@ -53,8 +53,10 @@ jobs:
       - id: discover
         run: |
           set -euo pipefail
-          [[ "$PARALLELISM" =~ ^[0-9]+$ ]] && (( PARALLELISM >= 1 && PARALLELISM <= 12 )) \
-            || { echo "::error::parallelism must be 1–12"; exit 1; }
+          if ! [[ "$PARALLELISM" =~ ^[0-9]+$ ]] || (( PARALLELISM < 1 || PARALLELISM > 12 )); then
+            echo "::error::parallelism must be 1–12"
+            exit 1
+          fi
           python scripts/structured_fleet.py plan --only "$LANGUAGES"
 
   credentials:
@@ -117,6 +119,6 @@ jobs:
             echo "Planned existing datasets: ${TOTAL:-0}"
             echo "Discovery: $PLAN; credentials: $PREFLIGHT; language publishers: $PUBLISH"
             echo "Individual language jobs show exact HF/Kaggle/Zenodo outcomes."
-            echo "Retry selected failed languages with the `languages` input; completed exports are reused."
+            echo "Retry selected failed languages with the languages input; completed exports are reused."
           } | tee -a "$GITHUB_STEP_SUMMARY"
           [[ "$PLAN" == success && "$PREFLIGHT" == success && "$PUBLISH" == success ]]
