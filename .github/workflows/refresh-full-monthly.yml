@@ -96,6 +96,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Never version new raw text alongside stale Parquet/SQLite.
+          kaggle datasets files "$FULL_KAGGLE_DATASET" --csv > "$RUNNER_TEMP/previous-files.csv"
+          if grep -Eq '\.parquet|\.sqlite\.zst' "$RUNNER_TEMP/previous-files.csv"; then
+            echo "::warning::Existing Kaggle structured files must be regenerated first; defer this Kaggle version until the structured-fleet rollout."
+            exit 0
+          fi
           mkdir -p current
           kaggle datasets download -d "$FULL_KAGGLE_DATASET" -p current --unzip
           file="enwiki_$(printf '%02d' "$SHARD_NUMBER")_of_$(printf '%02d' "$FULL_SHARD_COUNT").txt.gz"
