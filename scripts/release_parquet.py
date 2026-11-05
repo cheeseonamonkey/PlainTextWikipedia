@@ -188,6 +188,13 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     if not bucket.startswith("https://zenodo.org/api/files/") or not publish_url.startswith(url + "/"):
         raise RuntimeError("Unexpected Zenodo upload/publish endpoint")
     print(f"Zenodo draft {draft['id']} created: uploading verified Parquet only", flush=True)
+    # New-version drafts inherit old files. Zenodo requires deleting a file
+    # before replacing its bytes; only modify this unpublished draft.
+    for inherited in draft.get("files", []):
+        old = requests.delete(
+            f"{url}/{draft['id']}/files/{inherited['id']}",
+            headers=headers, timeout=30)
+        old.raise_for_status()
     with tempfile.TemporaryDirectory(prefix="wiki-zenodo-") as tmp:
         root = Path(tmp)
         info = root / "provenance.json"
