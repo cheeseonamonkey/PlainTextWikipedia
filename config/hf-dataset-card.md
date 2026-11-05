@@ -7,7 +7,6 @@ tags:
 - wikipedia
 - plain-text
 - parquet
-- sqlite
 - research-corpus
 ---
 
@@ -36,15 +35,14 @@ The machine-readable coverage file `data/build-manifest.json` records which root
 
 ## Structured editions (when available)
 
-The `structured/` directory contains **independently verified** additions to the original data; its presence varies by edition. Existing plaintext archives are retained.
+The `structured/` directory contains **independently verified Parquet** derived from the original data; its presence varies by edition. Existing plaintext archives are retained. Older SQLite outputs may still be present from previous versions but are no longer generated.
 
 | File | Use | Format |
 |---|---|---|
 | `structured/parquet/*.parquet` | Fast tabular analysis, pandas, DuckDB, Polars | Parquet (Zstandard) |
-| `structured/sqlite/*.sqlite.zst` | Local SQL queries; selected smaller shards have FTS5 | SQLite, compressed with Zstandard |
-| `structured/manifests/*.json` | Article count, raw SHA256, output SHA256, SQLite FTS5 flag | JSON |
+| `structured/manifests/*.parquet.json` | Article count, raw SHA256, output SHA256 | JSON |
 
-Parquet columns: `title` (string), `text` (string), `source_file` (string), `source_ordinal` (int64; 1-based within its source archive). **Original Wikipedia page IDs are not retained.** SQLite stores the same values and adds an article ID local to that file.
+Parquet columns: `title` (string), `text` (string), `source_file` (string), `source_ordinal` (int64; 1-based within its source archive). **Original Wikipedia page IDs are not retained.**
 
 ```python
 from huggingface_hub import HfApi, hf_hub_download
@@ -58,8 +56,6 @@ if not files:
 path = hf_hub_download(repo, filename=files[0], repo_type="dataset")
 print(pq.read_table(path, columns=["title", "text"]).slice(0, 3))
 ```
-
-To use a SQLite download: `zstd -d -c yourfile.sqlite.zst > yourfile.sqlite`, then `sqlite3 yourfile.sqlite`. Query `SELECT title FROM articles LIMIT 10;`. For shards whose manifest says `"fts5": true`, use `articles_fts MATCH 'query'`.
 
 **Coverage warning:** verify `data/build-manifest.json` before describing an edition as complete; a populated archive collection does not itself prove full source coverage.
 
