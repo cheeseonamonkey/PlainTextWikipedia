@@ -46,6 +46,23 @@ class KaggleActionsEnvironmentTests(unittest.TestCase):
                     verify_and_configure("token", "ffatty", home=root)
             self.assertFalse((root / "github_env").exists())
 
+    def test_import_error_is_not_mislabeled_as_bad_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            failure = SimpleNamespace(
+                returncode=1, stdout="",
+                stderr="ModuleNotFoundError: No module named 'six'",
+            )
+            with patch("scripts.kaggle_auth.subprocess.run", return_value=failure):
+                with self.assertRaisesRegex(RuntimeError, "credentials were not tested"):
+                    verify_and_configure("some-token", "ffatty", home=Path(tmp))
+
+    def test_transient_kaggle_outage_is_not_mislabeled_as_bad_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            failure = SimpleNamespace(returncode=1, stdout="", stderr="HTTP 503 Service Unavailable")
+            with patch("scripts.kaggle_auth.subprocess.run", return_value=failure):
+                with self.assertRaisesRegex(RuntimeError, "not proven invalid"):
+                    verify_and_configure("some-token", "ffatty", home=Path(tmp))
+
     def test_rejects_newline_injection(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = str(Path(tmp) / "env")
