@@ -161,6 +161,8 @@ class ArticleFeaturesTests(unittest.TestCase):
         self.assertEqual(tokens("ΣΊΓΜΑ"), ["σίγμα"])
         self.assertEqual(tokens("ПРИВЕТ"), ["привет"])
         self.assertEqual(tokens("CAFÉ"), ["café"])
+        from scripts.article_features import language_stopwords
+        self.assertIsInstance(language_stopwords("zz_unknown"), frozenset)
         self.assertEqual(fold("ΣΊΓΜΑ"), "σίγμα")
         self.assertEqual(fold("СТАТЬЯ"), "статья")
         self.assertEqual(fold("İSTANBUL"), "i\u0307stanbul")
