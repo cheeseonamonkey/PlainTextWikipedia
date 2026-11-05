@@ -290,7 +290,7 @@ class TestFleetPlanningAndKaggleProbe(unittest.TestCase):
         self.assertEqual(select_repos(repos, "simplewiki,enwiki"), [SIMPLE, english])
         self.assertEqual(select_repos(repos, "en,english,enwiki"), [english])
         self.assertEqual(select_repos(repos, "no,nob"), [norwegian])
-        self.assertEqual(select_repos(repos, "shwiki,ang"), [serbo_croatian, old_english])
+        self.assertEqual(select_repos(repos, "shwiki,ang"), [old_english, serbo_croatian])
         self.assertEqual(select_repos(repos, f"{SIMPLE},{english}"), [SIMPLE, english])
         with self.assertRaisesRegex(ValueError, "Unknown/unpublished"):
             select_repos([english], "sh")
