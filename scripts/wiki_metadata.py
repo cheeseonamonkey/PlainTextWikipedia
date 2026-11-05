@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote
 
@@ -14,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SIMPLE = "ffatty/plain-text-wikipedia-simpleenglish"
 
 
+@lru_cache(maxsize=256)
 def wiki_code(repo: str) -> str:
     """Return Wikimedia's wiki code, refusing unknown repo-to-project mappings."""
     if repo == SIMPLE:
