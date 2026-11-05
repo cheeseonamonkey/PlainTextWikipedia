@@ -20,7 +20,8 @@ class ZenodoResumeTests(unittest.TestCase):
             title = "Plaintext Wikipedia (simpleenglish) — Parquet edition"
             metadata = {"language": "simpleenglish", "source_url": "https://example.org",
                         "files": [{"source_sha256": "a" * 64}]}
-            asset = Asset("structured/parquet/foo.parquet", "b" * 64, parquet.stat().st_size)
+            asset = Asset("structured/parquet/foo.parquet", "b" * 64,
+                          parquet.stat().st_size, md5=checksum)
             draft = {
                 "id": 999, "submitted": False, "metadata": {"title": title},
                 "links": {
@@ -48,7 +49,7 @@ class ZenodoResumeTests(unittest.TestCase):
             )
             with (patch.dict(os.environ, {"ZENODO_TOKEN": "fake"}),
                   patch("scripts.release_parquet.list_matching_depositions", return_value=[draft]),
-                  patch("scripts.release_parquet.fetch_verified", return_value=parquet),
+                  patch("scripts.release_parquet.fetch_verified", return_value=parquet) as fetch,
                   patch("requests.put", side_effect=put),
                   patch("requests.delete") as delete,
                   patch("requests.post", return_value=published) as post):
@@ -57,6 +58,7 @@ class ZenodoResumeTests(unittest.TestCase):
                                [asset], metadata, None)
 
             delete.assert_not_called()
+            fetch.assert_not_called()  # Skip both the download and extra SHA256 scan.
             self.assertEqual(len(uploaded), 1)
             self.assertTrue(uploaded[0][0].endswith("/provenance.json"))
             post.assert_called_once()
