@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Incremental, per-language structured Wikipedia exports from existing HF archives.
 
-No Wikimedia XML conversion. Every published Parquet/SQLite output keeps source
-SHA256 provenance. Each language is independent, resumable, and idempotent.
+No Wikimedia XML conversion. Published Parquet preserves raw-source SHA256
+provenance; the original plaintext archives remain available. Each language is independent, resumable, and idempotent.
 """
 
 from __future__ import annotations
@@ -104,7 +104,7 @@ def plan() -> None:
         print(repo)
 
 
-def build(repo: str, format: str, fts_max_mb: int) -> None:
+def build(repo: str) -> None:
     if not re.fullmatch(r"ffatty/(?:plain-text-wikipedia-simpleenglish|plaintext-wikipedia-full-[a-z0-9-]+)", repo):
         raise ValueError(f"Unsupported target: {repo}")
     token = os.getenv("HF_TOKEN")
@@ -120,15 +120,10 @@ def build(repo: str, format: str, fts_max_mb: int) -> None:
     for path, info in sorted(sources.items()):
         name = Path(path).name.removesuffix(".txt.gz")
         digest = source_hash(info)
-        wanted = ("parquet", "sqlite") if format == "both" else (format,)
-        fts = "sqlite" in wanted and info.size <= fts_max_mb * 1024 * 1024
+        def is_current(known_hash):
+            return current_manifest(api, repo, name, "parquet", known_hash, remote)
 
-        def missing(known_hash):
-            return tuple(kind for kind in wanted
-                         if not current_manifest(api, repo, name, kind, known_hash,
-                                                 remote, require_fts=kind == "sqlite" and fts))
-
-        if digest and not missing(digest):
+        if digest and is_current(digest):
             skipped += 1
             print(f"SKIP already-current {repo}/{name}", flush=True)
             continue
@@ -141,15 +136,11 @@ def build(repo: str, format: str, fts_max_mb: int) -> None:
                 digest_actual = sha256(source)
                 if digest and digest != digest_actual:
                     raise ValueError(f"Source LFS SHA256 mismatch: {path}")
-                kinds = missing(digest_actual)
-                if not kinds:
+                if is_current(digest_actual):
                     skipped += 1
                     print(f"SKIP already-current {repo}/{name}", flush=True)
                     continue
-                # Build only outdated formats; preserve fresh Parquet/SQLite blobs.
-                selected = "both" if len(kinds) == 2 else kinds[0]
-                result = export(source, working / "output", selected,
-                                fts and "sqlite" in kinds)
+                result = export(source, working / "output", "parquet")
                 if result["source_sha256"] != digest_actual:
                     raise ValueError("Export provenance differs from downloaded source")
 
@@ -172,7 +163,7 @@ def build(repo: str, format: str, fts_max_mb: int) -> None:
                               commit_message=f"Verify {kind} source {name}"))
                 updated += 1
                 print(f"UPDATED {repo}/{name}: {result['articles']} articles, "
-                      f"{', '.join(result['artifacts'])}, FTS5={fts}", flush=True)
+                      f"Parquet", flush=True)
         except Exception as exc:
             failures.append(f"{path}: {type(exc).__name__}: {exc}")
             print(f"::error::{repo}/{path}: {type(exc).__name__}: {exc}", flush=True)
@@ -196,13 +187,11 @@ def main():
     sub.add_parser("plan")
     b = sub.add_parser("build")
     b.add_argument("--repo", required=True)
-    b.add_argument("--format", choices=["parquet", "sqlite", "both"], default="both")
-    b.add_argument("--fts-max-mb", type=int, default=100)
     args = p.parse_args()
     if args.command == "plan":
         plan()
     else:
-        build(args.repo, args.format, args.fts_max_mb)
+        build(args.repo)
 
 
 if __name__ == "__main__":

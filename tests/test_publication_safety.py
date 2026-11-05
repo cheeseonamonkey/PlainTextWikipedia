@@ -148,6 +148,106 @@ class TestPublishByDefault(unittest.TestCase):
                 mirror("ffatty/plain-text-wikipedia-simpleenglish",
                        max_mb=2500, require_publish=True)
 
+class TestParquetOnlyPublishing(unittest.TestCase):
+    def test_kaggle_does_not_require_or_generate_sqlite(self):
+        import hashlib
+        from scripts.structured_kaggle import mirror
+
+        repo = "ffatty/plain-text-wikipedia-simpleenglish"
+        stem = "simplewiki_01_of_01"
+        raw_name = f"{stem}.txt.gz"
+        parquet_name = f"{stem}.parquet"
+        raw_path = f"data/{raw_name}"
+        parquet_path = f"structured/parquet/{parquet_name}"
+        manifest_path = f"structured/manifests/{stem}.parquet.json"
+        with tempfile.TemporaryDirectory() as folder:
+            temp = Path(folder)
+            raw = temp / raw_name
+            parquet = temp / parquet_name
+            raw.write_bytes(b"Title\nBody\n\n")
+            parquet.write_bytes(b"PAR1testPAR1")
+            h = lambda file: hashlib.sha256(file.read_bytes()).hexdigest()
+            doc = {
+                "source_sha256": h(raw), "articles": 1,
+                "artifacts": {"parquet": {"path": f"parquet/{parquet_name}",
+                                          "sha256": h(parquet),
+                                          "size_bytes": parquet.stat().st_size}},
+            }
+            manifest = temp / "manifest.json"
+            manifest.write_text(json.dumps(doc))
+            tree = [
+                SimpleNamespace(path=raw_path, size=raw.stat().st_size,
+                                lfs={"sha256": h(raw)}),
+                SimpleNamespace(path=parquet_path, size=parquet.stat().st_size,
+                                lfs={"sha256": h(parquet)}),
+                SimpleNamespace(path=manifest_path, size=manifest.stat().st_size, lfs=None),
+            ]
+            hf_files = {raw_path: raw, parquet_path: parquet, manifest_path: manifest}
+            publish = []
+
+            def runner(*args, check=True):
+                if args[0] == "status":
+                    return SimpleNamespace(returncode=0, stdout='{"status":"ready"}')
+                if args[0] == "download":
+                    stage = Path(args[args.index("-p") + 1])
+                    (stage / raw_name).write_bytes(raw.read_bytes())
+                    (stage / f"{stem}.sqlite.zst").write_bytes(b"legacy-sqlite")
+                    return SimpleNamespace(returncode=0, stdout="")
+                if args[0] == "version":
+                    stage = Path(args[args.index("-p") + 1])
+                    publish.extend(p.name for p in stage.iterdir())
+                    meta = json.loads((stage / "dataset-metadata.json").read_text())
+                    self.assertNotIn("SQLite", meta["description"])
+                    self.assertNotIn("sqlite", json.dumps(meta["resources"]).lower())
+                    return SimpleNamespace(returncode=0, stdout="")
+                raise AssertionError(args)
+
+            with (patch("scripts.structured_kaggle.HfApi") as mock_api,
+                  patch("scripts.structured_kaggle.hf_hub_download",
+                        side_effect=lambda repo, filename, **kw: str(hf_files[filename])),
+                  patch("scripts.structured_kaggle.run", side_effect=runner)):
+                mock_api.return_value.list_repo_tree.return_value = tree
+                mirror(repo, 300, require_publish=True)
+            self.assertIn(parquet_name, publish)
+            self.assertIn(raw_name, publish)
+            self.assertIn("structured-manifest.json", publish)
+            self.assertFalse(any("sqlite" in name for name in publish))
+
+
+    def test_fleet_build_only_publishes_parquet(self):
+        import gzip
+        import hashlib
+        from scripts.structured_fleet import build
+
+        repo = "ffatty/plain-text-wikipedia-simpleenglish"
+        name = "simplewiki_01_of_01"
+        with tempfile.TemporaryDirectory() as folder:
+            raw = Path(folder) / f"{name}.txt.gz"
+            with gzip.open(raw, "wt", encoding="utf-8") as stream:
+                stream.write("Title\nBody\n\n")
+            with raw.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            source = SimpleNamespace(path=f"data/{raw.name}",
+                                     lfs={"sha256": digest}, size=raw.stat().st_size)
+            uploaded = []
+
+            def upload_file(*, path_in_repo, path_or_fileobj, **kwargs):
+                file = Path(path_or_fileobj)
+                self.assertTrue(file.is_file())
+                uploaded.append(path_in_repo)
+
+            with (patch.dict(os.environ, {"HF_TOKEN": "test-token"}),
+                  patch("scripts.structured_fleet.HfApi") as api,
+                  patch("scripts.structured_fleet.hf_hub_download", return_value=str(raw))):
+                api.return_value.list_repo_tree.return_value = [source]
+                api.return_value.upload_file.side_effect = upload_file
+                build(repo)
+            self.assertEqual(sorted(uploaded), [
+                f"structured/manifests/{name}.parquet.json",
+                f"structured/parquet/{name}.parquet",
+            ])
+
+
 class TestCIContracts(unittest.TestCase):
     def test_new_release_workflows_are_manual_only(self):
         for name in ("structured-fleet.yml", "zenodo-parquet.yml",
@@ -167,7 +267,16 @@ class TestCIContracts(unittest.TestCase):
         inputs = fleet["on"]["workflow_dispatch"]["inputs"]
         self.assertEqual(inputs["publish_zenodo"]["default"], "true")
         self.assertEqual(inputs["mirror_kaggle"]["default"], "true")
-        self.assertNotIn("upload-artifact", (root / "structured-fleet.yml").read_text())
+        self.assertNotIn("format", inputs)
+        for name in ("structured-fleet.yml", "structured-wikipedia.yml"):
+            workflow_text = (root / name).read_text()
+            self.assertNotIn("sqlite", workflow_text.lower())
+            self.assertNotIn("upload-artifact", workflow_text)
+            single = yaml.load(workflow_text, Loader=yaml.BaseLoader)
+            self.assertEqual(set(single["on"]), {"workflow_dispatch"})
+            if name == "structured-wikipedia.yml":
+                self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["mirror_kaggle"]["default"], "true")
+                self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["publish_zenodo"]["default"], "true")
         self.assertIn("--publish", (root / "zenodo-parquet.yml").read_text())
 
     def test_cli_entrypoints_import_without_scripts_package_errors(self):

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Safely version existing Kaggle Wikipedia datasets with verified HF formats.
+"""Version existing Kaggle Wikipedia datasets with raw text and verified Parquet.
 
-Never replace Kaggle's current file set with a structured-only upload. Skip
-oversized editions rather than dropping raw archives or breaking a published URL.
+Keep the original archives and Parquet in every new dataset version, without
+carrying forward old generated SQLite files. Skip oversized editions rather
+than dropping raw archives or breaking existing dataset URLs.
 Run after Kaggle authentication and successful/partial HF structured exports.
 """
 
@@ -79,24 +80,23 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
             return
         planned.append((source, digest, None))
         stem = Path(source).name.removesuffix(".txt.gz")
-        for kind in ("parquet", "sqlite"):
-            manifest_file = f"structured/manifests/{stem}.{kind}.json"
-            if manifest_file not in files:
-                skip(f"{repo}: missing {manifest_file}")
-                return
-            document = json.loads(Path(hf_hub_download(repo, filename=manifest_file,
-                              repo_type="dataset", token=api.token)).read_text())
-            if document.get("source_sha256") != digest or not document.get("articles"):
-                skip(f"{repo}: {kind} is stale or empty for {source}")
-                return
-            artifact = document["artifacts"][kind]
-            location = f"structured/{artifact['path']}"
-            if location not in files:
-                raise RuntimeError(f"Manifest points to missing file {location}")
-            planned.append((location, artifact["sha256"], artifact["size_bytes"]))
-            manifests.append(document)
+        manifest_file = f"structured/manifests/{stem}.parquet.json"
+        if manifest_file not in files:
+            skip(f"{repo}: missing {manifest_file}")
+            return
+        document = json.loads(Path(hf_hub_download(
+            repo, filename=manifest_file, repo_type="dataset", token=api.token)).read_text())
+        if document.get("source_sha256") != digest or not document.get("articles"):
+            skip(f"{repo}: Parquet is stale or empty for {source}")
+            return
+        artifact = document["artifacts"]["parquet"]
+        location = f"structured/{artifact['path']}"
+        if location not in files:
+            raise RuntimeError(f"Manifest points to missing file {location}")
+        planned.append((location, artifact["sha256"], artifact["size_bytes"]))
+        manifests.append(document)
     # Kaggle's latest dataset has a 50 top-level-file and 200GB total limit.
-    # We flatten 16*3 source/format files plus one compact manifest.
+    # Two files per source: original gzip and Parquet, plus one compact manifest.
     if len(planned) + 1 > 49:
         skip(f"{repo}: {len(planned)} input files exceed safe Kaggle file budget")
         return
@@ -135,14 +135,31 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
             raise RuntimeError("Kaggle dataset download returned zero files")
         if any(p.is_dir() for p in stage.iterdir()):
             raise RuntimeError("Dataset contains directories; cannot safely flatten them")
+
+        # Keep previous dataset versions intact, but stop carrying obsolete
+        # generated SQLite artifacts into the current two-format release.
+        obsolete = [p for p in stage.iterdir() if p.is_file() and
+                    p.name.endswith((".sqlite", ".sqlite.zst", ".sqlite.json"))]
+        for file in obsolete:
+            file.unlink()
+        if obsolete:
+            print(f"Dropped {len(obsolete)} legacy SQLite files from new Kaggle version",
+                  flush=True)
+
         # A repeated CI run should not re-upload an identical Kaggle version.
         provenance = {"version": 1, "source": f"https://huggingface.co/datasets/{repo}",
                       "archives": manifests}
         old_provenance = stage / "structured-manifest.json"
         if old_provenance.exists():
             try:
-                if json.loads(old_provenance.read_text()) == provenance:
-                    print(f"SKIP {dataset}: already contains these exact verified exports")
+                if (not obsolete and json.loads(old_provenance.read_text()) == provenance
+                        and all((stage / Path(location).name).is_file()
+                                and (expected_bytes is None or
+                                     (stage / Path(location).name).stat().st_size ==
+                                     int(expected_bytes))
+                                and sha256(stage / Path(location).name) == digest
+                                for location, digest, expected_bytes in planned)):
+                    print(f"SKIP {dataset}: verified original + Parquet already current")
                     return
             except (OSError, ValueError):
                 pass
@@ -182,15 +199,12 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
             "__REPO_URL__", "https://github.com/cheeseonamonkey/PlainTextWikipedia"
         ).replace("__UPSTREAM_URL__", "https://github.com/daveshap/PlainTextWikipedia")
         meta["licenses"] = [{"name": "CC-BY-SA-4.0"}]
-        meta["subtitle"] = "Wikipedia article corpus · Parquet, searchable SQLite, original text"
+        meta["subtitle"] = "Wikipedia articles · Original plaintext + Parquet"
         meta["description"] += (
             "\n\n## Choose a format\n"
             "- **Parquet (.parquet)**: Zstandard-compressed, ready for pandas, "
             "DuckDB and columnar analytics. Columns: `title`, `text`, "
             "`source_file`, `source_ordinal`.\n"
-            "- **SQLite (.sqlite.zst)**: downloadable SQL database; decompress "
-            "with `zstd -d FILE.sqlite.zst`. Small shards include FTS5 search; "
-            "see their manifests for `fts5`.\n"
             "- **Original (.txt.gz)**: retained verbatim. Each record uses title, "
             "single-line text, blank line.\n\n"
             "## Provenance and limitations\n"
@@ -208,8 +222,6 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
             name = file.name
             if name.endswith(".parquet"):
                 return "Columnar UTF-8 Wikipedia title/text, source archive and ordinal; zstd compressed."
-            if name.endswith(".sqlite.zst"):
-                return "Zstandard-compressed SQLite article database; inspect manifests for FTS5."
             if name.endswith(".txt.gz"):
                 return "Original gzip plaintext archive; title, text, blank line per article."
             if name == "structured-manifest.json":
@@ -226,10 +238,11 @@ def mirror(repo: str, max_mb: int, require_publish: bool = False):
         if count > 50:
             skip(f"{repo}: {count} files after preserving existing Kaggle data")
             return
-        print(f"Preserving {len(old_files)} old file(s); publishing {len(planned)} source "
-              f"and structured files to {dataset} ({total / 1048576:.0f} MiB)", flush=True)
+        print(f"Keeping {len(old_files) - len(obsolete)} prior file(s), "
+              f"verifying {len(planned)} original/Parquet files "
+              f"for {dataset} ({total / 1048576:.0f} MiB)", flush=True)
         run("version", "-p", str(stage), "-m",
-            "Add verified Parquet and SQLite Wikipedia editions",
+            "Update verified Parquet and original Wikipedia text",
             "--dir-mode", "skip", "--keep-tabular")
         print(f"VERSIONED https://www.kaggle.com/datasets/{dataset}")
         if dest := os.getenv("GITHUB_STEP_SUMMARY"):
