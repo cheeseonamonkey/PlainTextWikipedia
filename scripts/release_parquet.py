@@ -116,7 +116,7 @@ def limits(assets: list[Asset]):
     return total
 
 
-def fetch_verified(api: HfApi, repo: str, asset: Asset, directory: Path) -> Path:
+def fetch_verified(api: HfApi, repo: str, asset: Asset) -> Path:
     # Use the standard HF cache rather than an isolated temporary local_dir.
     # The preceding Kaggle step may already have downloaded this exact blob.
     path = Path(hf_hub_download(repo_id=repo, filename=asset.path,
@@ -271,9 +271,8 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
         info = root / "provenance.json"
         info.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
         for index, asset in enumerate(assets, 1):
-            with tempfile.TemporaryDirectory(dir=root) as folder:
-                source = fetch_verified(api, repo, asset, Path(folder))
-                upload_verified(source, 7200)
+            source = fetch_verified(api, repo, asset)
+            upload_verified(source, 7200)
             print(f"Processed {index}/{len(assets)}: {asset.path}", flush=True)
         upload_verified(info, 300)
     published = requests.post(publish_url, headers=headers, timeout=90)
