@@ -30,7 +30,7 @@ Unicode NFKC normalization plus Unicode case folding (language-independent)
 and folding of common typographic quotes, dashes and spacing. **Every vocabulary
 term, TF-IDF feature, fastText training token, and Bekko input uses this folded
 form, for all languages.** Original article titles and text remain unchanged. No transliteration to ASCII: preserve accents and
-non-Latin scripts. Unicode word extraction, with overlapping character
+non-Latin scripts. Unicode word extraction including combining marks, with overlapping character
 bigrams for unsegmented CJK/Thai runs. This is deliberately lightweight and
 not a sophisticated language-specific morphological tokenizer.
 
