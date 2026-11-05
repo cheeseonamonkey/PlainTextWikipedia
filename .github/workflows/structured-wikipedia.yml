@@ -1,243 +1,105 @@
-name: Structured Wikipedia (Parquet + SQLite)
+name: Publish one Wikipedia dataset (original + Parquet)
 
 on:
   workflow_dispatch:
     inputs:
       repo_id:
-        description: Existing HF dataset in ffatty/ namespace
+        description: Existing ffatty Wikipedia dataset
         required: true
-        default: ffatty/plain-text-wikipedia-simpleenglish
         type: string
-      format:
-        description: Output format
-        required: true
-        default: parquet
-        type: choice
-        options: [parquet, sqlite, both]
-      fts:
-        description: Add SQLite FTS5 full-text index
-        type: boolean
-        default: false
-      publish:
-        description: Publish beside existing raw files on Hugging Face
+        default: ffatty/plain-text-wikipedia-simpleenglish
+      mirror_kaggle:
+        description: Publish the existing Kaggle dataset version
         type: boolean
         default: true
-      mirror_kaggle:
-        description: Mirror verified outputs into the existing Simple English Kaggle dataset
+      publish_zenodo:
+        description: Publish or version Parquet on Zenodo
         type: boolean
-        default: false
-  push:
-    branches: [main]
-    paths:
-      - scripts/structured_export.py
-      - tests/test_structured_export.py
-      - .github/workflows/structured-wikipedia.yml
+        default: true
+      kaggle_stage_mb:
+        description: Kaggle staging limit (MiB)
+        type: number
+        default: 5000
 
 permissions:
   contents: read
 
 concurrency:
-  group: wiki-structured-${{ github.ref }}
+  group: wiki-parquet-${{ inputs.repo_id }}
   cancel-in-progress: false
 
 jobs:
-  plan:
+  publish:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.shards.outputs.matrix }}
+    timeout-minutes: 360
     env:
-      SOURCE_REPO: ${{ inputs.repo_id || 'ffatty/plain-text-wikipedia-simpleenglish' }}
-    steps:
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install huggingface_hub
-      - id: shards
-        run: |
-          python - <<'PY'
-          import json, os, re
-          from pathlib import Path
-          from huggingface_hub import HfApi
-          repo = os.environ['SOURCE_REPO']
-          if not re.fullmatch(r'ffatty/[a-z0-9._-]+', repo):
-              raise ValueError('Only ffatty datasets are supported')
-          files = sorted(x for x in HfApi().list_repo_files(repo, repo_type='dataset')
-                         if x.startswith('data/') and x.endswith('.txt.gz'))
-          if not 1 <= len(files) <= 256:
-              raise ValueError(f'Unexpected source archive count: {len(files)}')
-          entries = [{'archive': path, 'name': Path(path).name.removesuffix('.txt.gz')}
-                     for path in files]
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('matrix=' + json.dumps({'include': entries}, separators=(',', ':')) + '\n')
-          print(f'{len(entries)} source archives from {repo}')
-          PY
-
-  export:
-    needs: plan
-    name: Export ${{ matrix.name }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 240
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    env:
+      REPO: ${{ inputs.repo_id }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      SOURCE_REPO: ${{ inputs.repo_id || 'ffatty/plain-text-wikipedia-simpleenglish' }}
-      SOURCE_ARCHIVE: ${{ matrix.archive }}
-      EXPORT_FORMAT: ${{ github.event_name == 'push' && 'both' || inputs.format }}
-      FTS: ${{ github.event_name == 'push' || inputs.fts }}
-      PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install pyarrow zstandard huggingface_hub
-      - name: Download existing plaintext archive
-        run: |
-          python - <<'PY'
-          import os
-          from huggingface_hub import hf_hub_download
-          path = hf_hub_download(
-              repo_id=os.environ['SOURCE_REPO'], filename=os.environ['SOURCE_ARCHIVE'],
-              repo_type='dataset', token=os.getenv('HF_TOKEN') or None, local_dir='source')
-          with open(os.environ['GITHUB_ENV'], 'a') as out:
-              out.write('SOURCE_PATH=' + path + '\n')
-          PY
-      - name: Stream conversion and validate formats
-        shell: bash
-        run: |
-          set -euo pipefail
-          opts=(--format "$EXPORT_FORMAT")
-          if [[ "$FTS" == true && "$EXPORT_FORMAT" != parquet ]]; then opts+=(--fts); fi
-          python scripts/structured_export.py "$SOURCE_PATH" build/structured "${opts[@]}"
-      - name: Upload added files to existing HF dataset
-        if: env.PUBLISH == 'true'
-        run: |
-          test -n "$HF_TOKEN" || { echo '::error::HF_TOKEN is missing'; exit 1; }
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from huggingface_hub import HfApi
-          api = HfApi(token=os.environ['HF_TOKEN'])
-          repo = os.environ['SOURCE_REPO']
-          api.upload_folder(repo_id=repo, repo_type='dataset',
-                            folder_path='build/structured', path_in_repo='structured',
-                            commit_message=f"Structured export: {os.environ['SOURCE_ARCHIVE']}")
-          remote = set(api.list_repo_files(repo, repo_type='dataset'))
-          local = {'structured/' + p.relative_to('build/structured').as_posix()
-                   for p in Path('build/structured').rglob('*') if p.is_file()}
-          if not local.issubset(remote):
-              raise RuntimeError(f'Missing published files: {sorted(local - remote)}')
-          print(f'Published {len(local)} files into {repo}')
-          PY
-      - name: Retain outputs from build-only manual runs
-        if: env.PUBLISH != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: structured-${{ matrix.name }}
-          path: build/structured
-          retention-days: 3
-      - name: Free runner disk
-        if: always()
-        run: rm -rf source build
-
-  kaggle-simple:
-    needs: export
-    if: ${{ needs.export.result == 'success' && (github.event_name == 'push' || (inputs.publish && inputs.mirror_kaggle && inputs.repo_id == 'ffatty/plain-text-wikipedia-simpleenglish')) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+      WANT_KAGGLE: ${{ inputs.mirror_kaggle }}
+      WANT_ZENODO: ${{ inputs.publish_zenodo }}
+      MAX_MB: ${{ inputs.kaggle_stage_mb }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install huggingface_hub kaggle
-      - name: Authenticate Kaggle if configured
-        id: auth
-        shell: bash
-        run: |
-          if [[ -z "$KAGGLE_TOKEN" ]]; then
-            echo "::warning::KAGGLE_TOKEN not configured; HF published, Kaggle mirror skipped"
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          else
-            python scripts/kaggle_auth.py --owner ffatty
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Stage complete Kaggle dataset and verified new formats
-        if: steps.auth.outputs.enabled == 'true'
+      - run: python -m pip install huggingface_hub pyarrow requests kaggle six
+      - name: Check enabled publishers before downloading large archives
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p kaggle-publish
-          kaggle datasets download -d ffatty/plain-text-wikipedia-simpleenglish -p kaggle-publish --unzip
           python - <<'PY'
-          import hashlib, json, os, shutil
-          from pathlib import Path
-          from huggingface_hub import HfApi, hf_hub_download
-
-          repo = 'ffatty/plain-text-wikipedia-simpleenglish'
-          token = os.getenv('HF_TOKEN') or None
-          remote = set(HfApi(token=token).list_repo_files(repo, repo_type='dataset'))
-          stage = Path('kaggle-publish')
-          raw = 'data/simplewiki_01_of_01.txt.gz'
-          source = Path(hf_hub_download(repo, raw, repo_type='dataset', token=token))
-          with source.open('rb') as inp:
-              digest = hashlib.file_digest(inp, 'sha256').hexdigest()
-          shutil.copyfile(source, stage / Path(raw).name)
-
-          # Clear only prior generated outputs; preserve every other Kaggle file.
-          for name in ('simplewiki_01_of_01.parquet', 'simplewiki_01_of_01.sqlite.zst',
-                       'simplewiki_01_of_01.parquet.json', 'simplewiki_01_of_01.sqlite.json'):
-              (stage / name).unlink(missing_ok=True)
-          found = []
-          for kind in ('parquet', 'sqlite'):
-              manifest_name = f'structured/manifests/simplewiki_01_of_01.{kind}.json'
-              if manifest_name not in remote:
-                  continue
-              manifest_file = Path(hf_hub_download(repo, manifest_name,
-                                                   repo_type='dataset', token=token))
-              manifest = json.loads(manifest_file.read_text(encoding='utf-8'))
-              if manifest['source_sha256'] != digest:
-                  print(f'::warning::{kind} export source checksum is stale; skipping', flush=True)
-                  continue
-              artifact = manifest['artifacts'][kind]
-              remote_file = 'structured/' + artifact['path']
-              if remote_file not in remote:
-                  raise RuntimeError(f'Missing structured artifact: {remote_file}')
-              local = Path(hf_hub_download(repo, remote_file, repo_type='dataset', token=token))
-              with local.open('rb') as stream:
-                  actual = hashlib.file_digest(stream, 'sha256').hexdigest()
-              if actual != artifact['sha256']:
-                  raise RuntimeError(f'SHA256 verification failed: {remote_file}')
-              shutil.copyfile(local, stage / Path(remote_file).name)
-              shutil.copyfile(manifest_file, stage / Path(manifest_name).name)
-              found.append(kind)
-          if not found:
-              raise RuntimeError('No current verified structured formats found')
-          metadata = json.loads(Path('kaggle-metadata.json').read_text(encoding='utf-8'))
-          metadata['description'] += (
-              '\n\nStructured editions: ' + ', '.join(found) +
-              '. Manifests include raw source SHA256 and record counts. '
-              'SQLite assets are Zstandard-compressed, with optional FTS5 indexing.'
-          )
-          (stage / 'dataset-metadata.json').write_text(
-              json.dumps(metadata, ensure_ascii=False, indent=2) + '\n', encoding='utf-8'
-          )
-          print('Ready to version Kaggle with original files and ' + ', '.join(found))
+          import os
+          import requests
+          from huggingface_hub import HfApi
+          e = os.environ
+          if not e.get("HF_TOKEN"):
+              raise SystemExit("::error::HF_TOKEN is missing")
+          HfApi(token=e["HF_TOKEN"]).whoami()
+          if e["WANT_ZENODO"] == "true":
+              if not e.get("ZENODO_TOKEN"):
+                  raise SystemExit("::error::ZENODO_TOKEN is missing")
+              response = requests.get(
+                  "https://zenodo.org/api/deposit/depositions",
+                  params={"size": 1},
+                  headers={"Authorization": "Bearer " + e["ZENODO_TOKEN"]}, timeout=30)
+              response.raise_for_status()
           PY
-      - name: Publish new version to the existing Simple English Kaggle dataset
-        if: steps.auth.outputs.enabled == 'true'
-        shell: bash
+          if [[ "$WANT_KAGGLE" == true ]]; then
+            python scripts/kaggle_auth.py --owner ffatty
+          fi
+
+      - name: Build missing Parquet and publish to the existing Hugging Face dataset
+        id: hf
+        run: python scripts/structured_fleet.py build --repo "$REPO"
+
+      - name: Publish original + Parquet to existing Kaggle dataset
+        if: ${{ steps.hf.outcome == 'success' && inputs.mirror_kaggle }}
+        id: kaggle
+        continue-on-error: true
         run: |
-          set -euo pipefail
-          kaggle datasets version -p kaggle-publish \
-            -m "Add Parquet and SQLite structured Wikipedia editions" --dir-mode skip
-          echo "Published https://www.kaggle.com/datasets/ffatty/plain-text-wikipedia-simpleenglish"
-      - name: Free runner disk
+          python scripts/kaggle_auth.py --owner ffatty
+          python scripts/structured_kaggle.py --repo "$REPO" --max-mb "$MAX_MB" --require-publish
+
+      - name: Publish verified Parquet to Zenodo
+        if: ${{ steps.hf.outcome == 'success' && inputs.publish_zenodo }}
+        id: zenodo
+        continue-on-error: true
+        run: python scripts/release_parquet.py --repo "$REPO" --publish
+
+      - name: Report all enabled publishing outcomes
         if: always()
-        run: rm -rf kaggle-publish
+        shell: bash
+        env:
+          HF_STATUS: ${{ steps.hf.outcome }}
+          KAGGLE_STATUS: ${{ steps.kaggle.outcome }}
+          ZENODO_STATUS: ${{ steps.zenodo.outcome }}
+        run: |
+          echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
+          echo "HF=$HF_STATUS Kaggle=$KAGGLE_STATUS Zenodo=$ZENODO_STATUS" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$HF_STATUS" == success ]] || exit 1
+          [[ "$WANT_KAGGLE" != true || "$KAGGLE_STATUS" == success ]] || exit 1
+          [[ "$WANT_ZENODO" != true || "$ZENODO_STATUS" == success ]] || exit 1
