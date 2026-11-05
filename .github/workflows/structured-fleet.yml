@@ -1,18 +1,27 @@
-name: Publish Wikipedia editions to Hugging Face, Kaggle and Zenodo
+name: Publish all Wikipedia editions (original + Parquet)
 
 on:
   workflow_dispatch:
     inputs:
+      languages:
+        description: Optional comma-separated dataset IDs or language slugs (blank = all existing datasets)
+        type: string
+        required: false
+        default: ""
+      parallelism:
+        description: Simultaneous language publishers (1–12)
+        type: number
+        default: 8
       mirror_kaggle:
-        description: Publish new versions of existing Kaggle datasets
+        description: Publish existing Kaggle versions
         type: boolean
         default: true
       publish_zenodo:
-        description: Publish or version Zenodo research records (Parquet only)
+        description: Publish/continue Zenodo Parquet DOI releases
         type: boolean
         default: true
       kaggle_stage_mb:
-        description: Compressed staging limit per Kaggle runner (MiB); oversized releases fail visibly
+        description: Maximum Kaggle staging per runner (MiB)
         type: number
         default: 5000
 
@@ -25,23 +34,31 @@ concurrency:
 
 jobs:
   plan:
+    name: Find existing Wikipedia editions
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
+      total: ${{ steps.discover.outputs.total }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      LANGUAGES: ${{ inputs.languages }}
+      PARALLELISM: ${{ inputs.parallelism }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - run: python -m pip install huggingface_hub
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub
       - id: discover
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: python scripts/structured_fleet.py plan
+        run: |
+          set -euo pipefail
+          [[ "$PARALLELISM" =~ ^[0-9]+$ ]] && (( PARALLELISM >= 1 && PARALLELISM <= 12 )) \
+            || { echo "::error::parallelism must be 1–12"; exit 1; }
+          python scripts/structured_fleet.py plan --only "$LANGUAGES"
 
   credentials:
-    name: Check publisher credentials before any large downloads
+    name: Check all requested publisher credentials once
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
@@ -54,101 +71,52 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
-      - run: python -m pip install huggingface_hub kaggle six requests
-      - name: Validate destination credentials (read-only)
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub kaggle six requests
+      - name: Read-only publisher preflight
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import os
-          import requests
-          from huggingface_hub import HfApi
-          e = os.environ
-          if not e.get("HF_TOKEN"):
-              raise SystemExit("::error::HF_TOKEN missing")
-          HfApi(token=e["HF_TOKEN"]).whoami()
-          if e["WANT_ZENODO"] == "true":
-              if not e.get("ZENODO_TOKEN"):
-                  raise SystemExit("::error::ZENODO_TOKEN missing")
-              response = requests.get(
-                  "https://zenodo.org/api/deposit/depositions",
-                  params={"size": 1},
-                  headers={"Authorization": "Bearer " + e["ZENODO_TOKEN"]},
-                  timeout=30,
-              )
-              response.raise_for_status()
-              if not isinstance(response.json(), list):
-                  raise RuntimeError("Unexpected Zenodo account response")
-          PY
-          if [[ "$WANT_KAGGLE" == true ]]; then
-            [[ -n "$KAGGLE_TOKEN" ]] || { echo "::error::KAGGLE_TOKEN missing"; exit 1; }
-            python scripts/kaggle_auth.py --owner ffatty
-          fi
-          echo "All enabled destinations passed read-only authentication checks"
+          args=()
+          [[ "$WANT_KAGGLE" == true ]] || args+=(--no-kaggle)
+          [[ "$WANT_ZENODO" == true ]] || args+=(--no-zenodo)
+          python scripts/publish_preflight.py "${args[@]}"
 
-  export:
-    name: Publish original + Parquet to three hosts — ${{ matrix.repo }}
+  publish:
+    name: ${{ matrix.repo }}
     needs: [plan, credentials]
     if: ${{ needs.plan.result == 'success' && needs.credentials.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: ${{ inputs.parallelism }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    env:
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-      ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
-      REPO: ${{ matrix.repo }}
-      WANT_KAGGLE: ${{ inputs.mirror_kaggle }}
-      WANT_ZENODO: ${{ inputs.publish_zenodo }}
-      MAX_MB: ${{ inputs.kaggle_stage_mb }}
+    uses: ./.github/workflows/structured-wikipedia.yml
+    with:
+      repo_id: ${{ matrix.repo }}
+      mirror_kaggle: ${{ inputs.mirror_kaggle }}
+      publish_zenodo: ${{ inputs.publish_zenodo }}
+      kaggle_stage_mb: ${{ inputs.kaggle_stage_mb }}
+      skip_preflight: true
+    secrets: inherit
+
+  summary:
+    name: Overall release status
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [plan, credentials, publish]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: python -m pip install huggingface_hub pyarrow requests kaggle six
-      - name: Build or reuse current formats; publish to Hugging Face
-        id: hf
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/structured_fleet.py build --repo "$REPO"
-
-      - name: Publish new version to existing Kaggle dataset (preserve original files)
-        if: ${{ steps.hf.outcome == 'success' && inputs.mirror_kaggle }}
-        id: kaggle
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/kaggle_auth.py --owner ffatty
-          python scripts/structured_kaggle.py --repo "$REPO" --max-mb "$MAX_MB" --require-publish
-
-      - name: Publish or version Zenodo DOI (Parquet only)
-        if: ${{ steps.hf.outcome == 'success' && inputs.publish_zenodo }}
-        id: zenodo
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/release_parquet.py --repo "$REPO" --publish
-
-      - name: Require successful publication at each enabled destination
-        if: always()
-        shell: bash
+      - name: State results, including partial failures
         env:
-          HF_OUTCOME: ${{ steps.hf.outcome }}
-          KAGGLE_OUTCOME: ${{ steps.kaggle.outcome }}
-          ZENODO_OUTCOME: ${{ steps.zenodo.outcome }}
+          PLAN: ${{ needs.plan.result }}
+          PREFLIGHT: ${{ needs.credentials.result }}
+          PUBLISH: ${{ needs.publish.result }}
+          TOTAL: ${{ needs.plan.outputs.total }}
         run: |
-          set -euo pipefail
-          echo "### $REPO" >> "$GITHUB_STEP_SUMMARY"
-          echo "Hugging Face: $HF_OUTCOME; Kaggle: $KAGGLE_OUTCOME; Zenodo: $ZENODO_OUTCOME" \
-            | tee -a "$GITHUB_STEP_SUMMARY"
-          [[ "$HF_OUTCOME" == success ]] || exit 1
-          if [[ "$WANT_KAGGLE" == true && "$KAGGLE_OUTCOME" != success ]]; then exit 1; fi
-          if [[ "$WANT_ZENODO" == true && "$ZENODO_OUTCOME" != success ]]; then exit 1; fi
+          {
+            echo "## Wikipedia fleet release"
+            echo "Planned existing datasets: ${TOTAL:-0}"
+            echo "Discovery: $PLAN; credentials: $PREFLIGHT; language publishers: $PUBLISH"
+            echo "Individual language jobs show exact HF/Kaggle/Zenodo outcomes."
+            echo "Retry selected failed languages with the `languages` input; completed exports are reused."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ "$PLAN" == success && "$PREFLIGHT" == success && "$PUBLISH" == success ]]
