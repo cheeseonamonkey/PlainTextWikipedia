@@ -48,6 +48,77 @@ class ReusableWorkflowTests(unittest.TestCase):
             self.assertEqual(form["publish_zenodo"]["default"], "true")
 
 
+class WikimediaLanguageSelectorsTests(unittest.TestCase):
+    def test_primary_and_simple_language_codes(self):
+        from scripts.structured_fleet import SIMPLE, PRIMARY_PROJECTS, select_repos
+
+        repos = [SIMPLE] + [
+            f"ffatty/plaintext-wikipedia-full-{slug}" for slug in PRIMARY_PROJECTS
+        ]
+        self.assertEqual(select_repos(repos, "simple,en"), [
+            SIMPLE, "ffatty/plaintext-wikipedia-full-english",
+        ])
+        self.assertEqual(select_repos(repos, "simplewiki,enwiki"), [
+            SIMPLE, "ffatty/plaintext-wikipedia-full-english",
+        ])
+        self.assertEqual(select_repos(repos, "en,english,enwiki"), [
+            "ffatty/plaintext-wikipedia-full-english",
+        ])
+        self.assertEqual(select_repos(repos, "no,nob"), [
+            "ffatty/plaintext-wikipedia-full-norwegian",
+        ])
+        for slug, project in PRIMARY_PROJECTS.items():
+            repo = f"ffatty/plaintext-wikipedia-full-{slug}"
+            for selector in (slug, project, project.removesuffix("wiki"), repo):
+                with self.subTest(slug=slug, selector=selector):
+                    self.assertEqual(select_repos(repos, selector), [repo])
+
+    def test_every_catalog_language_has_a_wikimedia_code_alias(self):
+        from scripts.structured_fleet import dataset_aliases, language_projects
+
+        projects = language_projects()
+        repos = [f"ffatty/plaintext-wikipedia-full-{slug}" for slug in projects]
+        index = dataset_aliases(repos)
+        self.assertGreaterEqual(len(projects), 200)
+        for slug, project in projects.items():
+            repo = f"ffatty/plaintext-wikipedia-full-{slug}"
+            code = project.removesuffix("wiki")
+            for alias in (slug, project, code, repo):
+                with self.subTest(slug=slug, alias=alias):
+                    self.assertEqual(index[alias], {repo})
+
+    def test_hyphenated_and_nonstandard_wikipedia_codes(self):
+        from scripts.structured_fleet import select_repos
+
+        repos = [
+            "ffatty/plaintext-wikipedia-full-serbo-croatian",
+            "ffatty/plaintext-wikipedia-full-classical-chinese",
+            "ffatty/plaintext-wikipedia-full-nigerian-pidgin",
+        ]
+        self.assertEqual(select_repos(repos, "sh,zh_classical,pcm"), repos)
+
+    def test_reject_unknown_empty_and_ambiguous_selectors(self):
+        from scripts.structured_fleet import SIMPLE, select_repos
+
+        repos = [SIMPLE, "ffatty/plaintext-wikipedia-full-english"]
+        for selector in ("en,unknown", "xx", "en,", ",en", "en,,simple"):
+            with self.subTest(selector=selector), self.assertRaises(ValueError):
+                select_repos(repos, selector)
+        self.assertEqual(select_repos(repos, ""), repos)
+        self.assertEqual(select_repos(repos, "EN, Simple"), repos)
+
+        ambiguous = repos + ["ffatty/plaintext-wikipedia-full-en"]
+        with self.assertRaisesRegex(ValueError, "Ambiguous"):
+            select_repos(ambiguous, "en")
+
+    def test_unpublished_languages_are_not_scheduled(self):
+        from scripts.structured_fleet import select_repos
+
+        available = ["ffatty/plaintext-wikipedia-full-german"]
+        with self.assertRaisesRegex(ValueError, "Unknown/unpublished"):
+            select_repos(available, "en")
+
+
 class PreflightTests(unittest.TestCase):
     def test_optional_publishers_are_never_touched_when_disabled(self):
         with (patch.dict(os.environ, {"HF_TOKEN": "test"}, clear=True),
