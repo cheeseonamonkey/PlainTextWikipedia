@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Plan and explicitly publish verified Parquet-only archives to Zenodo or IA.
+"""Plan and explicitly publish verified Parquet-only archives to Zenodo.
 
 Manual-only: without --publish, performs read-only verification of HF metadata.
-Neither destination receives uploads unless --publish is explicitly supplied.
+No files are uploaded unless --publish is explicitly supplied.
 """
 
 from __future__ import annotations
@@ -19,8 +19,6 @@ from pathlib import Path
 from huggingface_hub import HfApi, hf_hub_download
 
 ZENODO_MAX = 50_000_000_000
-IA_FILE_MAX = 50_000_000_000
-IA_ITEM_MAX = 100_000_000_000
 SOURCE = "https://github.com/cheeseonamonkey/PlainTextWikipedia"
 UPSTREAM = "https://github.com/daveshap/PlainTextWikipedia"
 
@@ -109,13 +107,10 @@ def inventory(api: HfApi, repo: str) -> tuple[list[Asset], dict]:
     return assets, metadata
 
 
-def limits(assets: list[Asset], destination: str):
+def limits(assets: list[Asset]):
     total = sum(a.size for a in assets)
-    if destination == "zenodo":
-        if total + 1_000_000 > ZENODO_MAX or len(assets) + 1 > 100:
-            raise ValueError("Exceeds Zenodo default 50 GB / 100-file record limits")
-    elif total + 1_000_000 > IA_ITEM_MAX or any(a.size > IA_FILE_MAX for a in assets):
-        raise ValueError("Exceeds conservative Internet Archive file/item limits")
+    if total + 1_000_000 > ZENODO_MAX or len(assets) + 1 > 100:
+        raise ValueError("Exceeds Zenodo default 50 GB / 100-file record limits")
     return total
 
 
@@ -205,59 +200,10 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     print(f"Zenodo publication: {doc.get('doi_url') or doc.get('record_url')}", flush=True)
 
 
-def archive_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict):
-    import internetarchive
-
-    access = os.getenv("IA_ACCESS_KEY_ID")
-    secret = os.getenv("IA_SECRET_ACCESS_KEY")
-    if not access or not secret:
-        raise RuntimeError("Set IA_ACCESS_KEY_ID and IA_SECRET_ACCESS_KEY GitHub secrets first")
-    identifier = "ffatty-wikipedia-parquet-" + metadata["language"]
-    details = {
-        "title": f"Plaintext Wikipedia ({metadata['language']}) — Parquet corpus",
-        "creator": "cheeseonamonkey; Wikipedia contributors",
-        "description": (
-            "Verified Parquet-only article corpus derived from Wikimedia dumps. "
-            "See provenance.json for source hashes and record counts. "
-            "Coverage may be incomplete. Maintained at " + SOURCE +
-            "; original sources at " + metadata["source_url"]
-        ),
-        "mediatype": "data",
-        "collection": "opensource_media",
-        "subject": "Wikipedia; Parquet; machine learning; open data",
-        "licenseurl": "https://creativecommons.org/licenses/by-sa/3.0/",
-        "source": metadata["source_url"],
-    }
-    item = internetarchive.get_item(identifier)
-    with tempfile.TemporaryDirectory(prefix="wiki-archive-") as tmp:
-        root = Path(tmp)
-        info = root / "provenance.json"
-        info.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n")
-        for index, asset in enumerate(assets, 1):
-            with tempfile.TemporaryDirectory(dir=root) as folder:
-                source = fetch_verified(api, repo, asset, Path(folder))
-                responses = item.upload_file(
-                    str(source), key=source.name, metadata=details,
-                    access_key=access, secret_key=secret,
-                    retries=5, checksum=True, verify=True, queue_derive=False,
-                )
-                if any(getattr(r, "status_code", 500) >= 400 for r in
-                       (responses if isinstance(responses, list) else [responses])):
-                    raise RuntimeError(f"Internet Archive upload failed: {asset.path}")
-            print(f"Uploaded {index}/{len(assets)}: {asset.path}", flush=True)
-        responses = item.upload_file(
-            str(info), key="provenance.json", metadata=details,
-            access_key=access, secret_key=secret, checksum=True, verify=True)
-        if any(getattr(r, "status_code", 500) >= 400 for r in
-               (responses if isinstance(responses, list) else [responses])):
-            raise RuntimeError("Internet Archive provenance upload failed")
-    print(f"Archive: https://archive.org/details/{identifier}", flush=True)
-
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
-    parser.add_argument("--destination", choices=("zenodo", "archive"), required=True)
     parser.add_argument("--publish", action="store_true",
                         help="EXPLICITLY authorize third-party uploads and publication")
     parser.add_argument("--zenodo-id", type=int,
@@ -265,18 +211,13 @@ def main():
     args = parser.parse_args()
     api = HfApi(token=os.getenv("HF_TOKEN") or None)
     assets, metadata = inventory(api, args.repo)
-    total = limits(assets, args.destination)
+    total = limits(assets)
     print(f"Validated {len(assets)} verified Parquet artifacts / {total / 1e9:.2f} GB"
-          f" in existing {args.repo}; target={args.destination}", flush=True)
+          f" in existing {args.repo}; target=zenodo", flush=True)
     if not args.publish:
         print("DRY RUN ONLY — no files uploaded, no records created", flush=True)
         return
-    if args.destination == "zenodo":
-        zenodo_publish(api, args.repo, assets, metadata, args.zenodo_id)
-    else:
-        if args.zenodo_id:
-            raise ValueError("--zenodo-id only applies to Zenodo")
-        archive_publish(api, args.repo, assets, metadata)
+    zenodo_publish(api, args.repo, assets, metadata, args.zenodo_id)
 
 
 if __name__ == "__main__":
