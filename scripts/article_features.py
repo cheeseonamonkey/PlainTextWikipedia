@@ -37,15 +37,15 @@ except ModuleNotFoundError as exc:
         raise
     from repack_shards import records
 
-VERSION = 2
+VERSION = 3
 VOCAB_SIZE = 10_000
 TFIDF_SIZE = 5_000
 DENSE_DIMS = 200
 FASTTEXT_DIMS = 160
-FASTTEXT_PROJECTED_DIMS = 96
+FASTTEXT_PROJECTED_DIMS = 48
 BEKKO_DIMS = 128
-BEKKO_PROJECTED_DIMS = 64
-LEXICAL_DIMS = 32
+BEKKO_PROJECTED_DIMS = 128
+LEXICAL_DIMS = 16
 METRIC_DIMS = 8
 K1, B = 1.5, 0.75
 # Don't transliterate: those letters are necessary for multilingual text.
@@ -78,6 +78,13 @@ CSV_FIELDS = (
     "bekko_q8_b64", "bekko_scales_b64", "bekko_input_tokens",
     "bekko_truncated", "bekko_available",
     "semantic_available", "fasttext_training_tokens",
+    "effective_vocabulary", "normalized_entropy", "simpson_diversity",
+    "hapax_token_ratio", "rare_token_ratio", "rare_term_ratio",
+    "mean_term_frequency", "idf_std", "keyword_token_share",
+    "keyword_title_overlap", "title_tfidf_share", "bm15_mean",
+    "bm15_top5_share", "sentence_length_cv", "extractive_position",
+    "extractive_margin", "lead_keyword_overlap", "vector_quant_cosine",
+    "vector_active_fraction", "fusion_component_energy_json",
 )
 
 
@@ -162,7 +169,9 @@ def lexical_hash(scores: list[tuple[int, float]]) -> np.ndarray:
     for term_id, score in scores:
         digest = hashlib.blake2s(str(term_id).encode(), digest_size=4).digest()
         slot = int.from_bytes(digest, "little") % LEXICAL_DIMS
-        sign = -1 if digest[0] & 1 else 1
+        # Slot uses digest[0] low bits; using that byte's parity for
+        # sign makes half the buckets *always* negative. Keep independent.
+        sign = -1 if digest[3] & 1 else 1
         arr[slot] += sign * score
     return norm(arr)
 
@@ -173,20 +182,50 @@ FASTTEXT_PROJECTION = (np.random.default_rng(2026).choice(
     .astype(np.float32) / math.sqrt(FASTTEXT_PROJECTED_DIMS))
 
 
+# Fractions of *cosine similarity* attributable to each independent subspace,
+# not raw amplitude multipliers. Squared amplitudes determine dot-product share.
+FUSION_IMPORTANCE = {
+    "bekko": 0.55, "fasttext": 0.40,
+    "lexical": 0.03, "metrics": 0.02,
+}
+
+
+def combined_vector(semantic: np.ndarray | None, lexical: np.ndarray,
+                    metrics: list[float], bekko: np.ndarray
+                    ) -> tuple[np.ndarray, dict[str, float]]:
+    """Keep all 128 Bekko dims; randomly project fastText 160->48.
+
+    Concatenating L2-normalized orthogonal subspaces weighted by sqrt(p)
+    gives each component its prescribed contribution to cosine similarity.
+    """
+    if len(metrics) != METRIC_DIMS or bekko.shape != (BEKKO_DIMS,) or lexical.shape != (LEXICAL_DIMS,):
+        raise ValueError("Invalid mixed-vector inputs")
+    fasttext = (norm(np.asarray(semantic, dtype=np.float32) @ FASTTEXT_PROJECTION)
+                if semantic is not None else np.zeros(FASTTEXT_PROJECTED_DIMS, np.float32))
+    centered_metrics = (np.asarray(metrics, dtype=np.float32) - 0.5) * 2
+    blocks = {
+        "bekko": norm(np.asarray(bekko, dtype=np.float32)),
+        "fasttext": fasttext,
+        "lexical": norm(np.asarray(lexical, dtype=np.float32)),
+        "metrics": norm(centered_metrics),
+    }
+    if any(not np.isfinite(values).all() for values in blocks.values()):
+        raise ValueError("Non-finite embedding component")
+    weighted = {key: values * math.sqrt(FUSION_IMPORTANCE[key])
+                for key, values in blocks.items()}
+    values = np.concatenate([weighted[key] for key in ("bekko", "fasttext", "lexical", "metrics")])
+    if values.size != DENSE_DIMS:
+        raise RuntimeError("Invalid combined vector shape")
+    energy = {key: float(np.dot(value, value)) for key, value in weighted.items()}
+    total = sum(energy.values())
+    return norm(values), ({key: amount / total if total else 0.
+                           for key, amount in energy.items()})
+
+
 def vectorize(semantic: np.ndarray | None, lexical: np.ndarray,
               metrics: list[float], bekko: np.ndarray) -> tuple[str, str]:
-    """160D fastText -> 96D, plus 64D Bekko, 32D TF-IDF, 8D metrics."""
-    if len(metrics) != METRIC_DIMS or bekko.shape != (BEKKO_DIMS,):
-        raise ValueError("Invalid mixed-vector inputs")
-    semantic96 = (norm(semantic.astype(np.float32) @ FASTTEXT_PROJECTION)
-                  if semantic is not None else np.zeros(FASTTEXT_PROJECTED_DIMS, np.float32))
-    parts = np.concatenate((semantic96 * .68,
-                            norm(bekko[:BEKKO_PROJECTED_DIMS].astype(np.float32)) * .22,
-                            lexical * .08,
-                            np.asarray(metrics, dtype=np.float32) * .02))
-    if len(parts) != DENSE_DIMS:
-        raise RuntimeError("Invalid combined vector shape")
-    return quantize(norm(parts))
+    vector, _ = combined_vector(semantic, lexical, metrics, bekko)
+    return quantize(vector)
 
 
 def source_articles(files: list[Path]):
