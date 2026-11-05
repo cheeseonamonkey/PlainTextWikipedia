@@ -182,19 +182,26 @@ def export(source: Path, destination: Path, format: str = "parquet",
             "wikipedia_page_ids_available": False,
             "artifacts": artifacts,
         }
-        meta = stage / f"{stem}.json"
-        meta.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
-                        encoding="utf-8")
+        # Independent format manifests prevent a refreshed Parquet export from
+        # silently making an older SQLite download appear current (or vice versa).
+        metadata = []
+        for kind, artifact in artifacts.items():
+            item = {**manifest, "artifacts": {kind: artifact}}
+            path = stage / f"{stem}.{kind}.json"
+            path.write_text(json.dumps(item, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8")
+            metadata.append(path)
 
-        # The manifest is installed last. All outputs are local until CI's
+        # The manifests are installed last. All outputs are local until CI's
         # single-commit Hub upload; source plaintext archives are never changed.
-        for kind, info in artifacts.items():
+        for info in artifacts.values():
             target = destination / info["path"]
             target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(stage / Path(info["path"]).name, target)
-        metadata_target = destination / "manifests" / meta.name
-        metadata_target.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(meta, metadata_target)
+        for path in metadata:
+            target = destination / "manifests" / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(path, target)
         return manifest
 
 
