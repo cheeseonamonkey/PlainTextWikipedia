@@ -3,12 +3,6 @@ name: Publish Wikipedia editions to Hugging Face, Kaggle and Zenodo
 on:
   workflow_dispatch:
     inputs:
-      format:
-        description: HF/Kaggle structured editions; must include Parquet when Zenodo is enabled
-        type: choice
-        required: true
-        default: both
-        options: [both, parquet, sqlite]
       mirror_kaggle:
         description: Publish new versions of existing Kaggle datasets
         type: boolean
@@ -56,7 +50,6 @@ jobs:
       ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
       WANT_KAGGLE: ${{ inputs.mirror_kaggle }}
       WANT_ZENODO: ${{ inputs.publish_zenodo }}
-      EXPORT_FORMAT: ${{ inputs.format }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,8 +69,6 @@ jobs:
               raise SystemExit("::error::HF_TOKEN missing")
           HfApi(token=e["HF_TOKEN"]).whoami()
           if e["WANT_ZENODO"] == "true":
-              if e["EXPORT_FORMAT"] == "sqlite":
-                  raise SystemExit("::error::Zenodo requires a Parquet export")
               if not e.get("ZENODO_TOKEN"):
                   raise SystemExit("::error::ZENODO_TOKEN missing")
               response = requests.get(
@@ -97,7 +88,7 @@ jobs:
           echo "All enabled destinations passed read-only authentication checks"
 
   export:
-    name: Publish three formats/destinations — ${{ matrix.repo }}
+    name: Publish original + Parquet to three hosts — ${{ matrix.repo }}
     needs: [plan, credentials]
     if: ${{ needs.plan.result == 'success' && needs.credentials.result == 'success' }}
     runs-on: ubuntu-latest
@@ -111,7 +102,6 @@ jobs:
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
       ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
       REPO: ${{ matrix.repo }}
-      FORMAT: ${{ inputs.format }}
       WANT_KAGGLE: ${{ inputs.mirror_kaggle }}
       WANT_ZENODO: ${{ inputs.publish_zenodo }}
       MAX_MB: ${{ inputs.kaggle_stage_mb }}
@@ -120,13 +110,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install huggingface_hub pyarrow zstandard requests kaggle six
+      - run: python -m pip install huggingface_hub pyarrow requests kaggle six
       - name: Build or reuse current formats; publish to Hugging Face
         id: hf
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/structured_fleet.py build --repo "$REPO" --format "$FORMAT" --fts-max-mb 100
+          python scripts/structured_fleet.py build --repo "$REPO"
 
       - name: Publish new version to existing Kaggle dataset (preserve original files)
         if: ${{ steps.hf.outcome == 'success' && inputs.mirror_kaggle }}
