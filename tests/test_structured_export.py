@@ -62,6 +62,29 @@ class StructuredExportTests(unittest.TestCase):
             self.assertEqual(meta["source_sha256"], info["source_sha256"])
             self.assertEqual(meta["artifacts"], {kind: info["artifacts"][kind]})
 
+    def test_adaptive_batches_keep_ordinal_and_bound_article_bytes(self):
+        import pyarrow.parquet as pq
+        from scripts.structured_export import batches
+
+        # A tiny cap forces a separate row group without truncating content.
+        chunks = list(batches(self.source, 16384, max_bytes=42))
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual([row[3] for chunk in chunks for row in chunk], [1, 2, 3])
+        self.assertEqual([row[1] for chunk in chunks for row in chunk],
+                         [body for _, body in self.rows])
+        result = export(self.source, self.root / "adaptive", format="parquet",
+                        batch_size=16384, batch_max_mb=1)
+        parquet = self.root / "adaptive" / result["artifacts"]["parquet"]["path"]
+        table = pq.read_table(parquet)
+        self.assertEqual(table.column("title").to_pylist(), [title for title, _ in self.rows])
+        self.assertEqual(table.column("source_ordinal").to_pylist(), [1, 2, 3])
+
+    def test_reject_invalid_batch_memory_caps(self):
+        with self.assertRaisesRegex(ValueError, "batch_max_mb"):
+            export(self.source, self.root / "invalid", batch_max_mb=0)
+        with self.assertRaisesRegex(ValueError, "batch_max_mb"):
+            export(self.source, self.root / "invalid", batch_max_mb=513)
+
     def test_sqlite_without_fts(self):
         import zstandard as zstd
 
