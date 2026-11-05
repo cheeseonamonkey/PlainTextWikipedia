@@ -95,7 +95,7 @@ class WikimediaLanguageSelectorsTests(unittest.TestCase):
             "ffatty/plaintext-wikipedia-full-classical-chinese",
             "ffatty/plaintext-wikipedia-full-nigerian-pidgin",
         ]
-        self.assertEqual(select_repos(repos, "sh,zh_classical,pcm"), repos)
+        self.assertEqual(select_repos(repos, "sh,zh_classical,pcm"), sorted(repos))
 
     def test_reject_unknown_empty_and_ambiguous_selectors(self):
         from scripts.structured_fleet import SIMPLE, select_repos
