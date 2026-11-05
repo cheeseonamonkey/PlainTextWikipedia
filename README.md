@@ -5,7 +5,7 @@ Convert official Wikimedia dumps into independently compressed, UTF-8 plaintext 
 
 ## Original plaintext + Parquet editions
 
-Existing published plaintext shards are also available as **Zstandard-compressed Parquet** for training and analytics. Each language keeps its original gzip archives and adds Parquet to the **same existing dataset**; no Wikimedia XML reconversion is required. Parquet exports preserve source SHA-256 provenance. Legacy SQLite files, where already published, are not regenerated. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
+Existing published plaintext shards are also available as **Zstandard-compressed Parquet** for training and analytics. Each language keeps its original gzip archives and adds Parquet to the **same existing dataset**; no Wikimedia XML reconversion is required. Parquet exports preserve source SHA-256 provenance, with one row per article and inexpensive text metrics (`char_count`, `byte_count`, `word_count`) plus a best-effort `article_url`. Article images require a separate API-backed enrichment pass and are not included. Legacy SQLite files, where already published, are not regenerated. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
 
 **Publishing:** Run [all languages](.github/workflows/structured-fleet.yml)
 (one queued, bounded-concurrency workflow) or
