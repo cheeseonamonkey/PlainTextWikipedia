@@ -387,7 +387,8 @@ def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
     hapax = sum(c == 1 for c in counts.values())
     entropy = -sum((n / total) * math.log(n / total) for n in counts.values()) if length else 0.
     normalized_entropy = entropy / math.log(distinct) if distinct > 1 else 0.
-    simpson_diversity = 1. - sum(n * n for n in counts.values()) / (total * total)
+    simpson_diversity = (1. - sum(n * n for n in counts.values()) / (total * total)
+                         if length else 0.)
     # Only retain vocabulary word counts in the CSV; the SQLite counts BLOB
     # preserves *all* intermediary terms, including terms outside top 10K.
     known = {term: count for term, count in counts.items() if term in vocabulary_lookup}
