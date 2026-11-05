@@ -253,6 +253,82 @@ class TestParquetOnlyPublishing(unittest.TestCase):
             ])
 
 
+class TestFleetPlanningAndKaggleProbe(unittest.TestCase):
+    def test_language_selection_and_longest_jobs_first(self):
+        from scripts.structured_fleet import SIMPLE, select_repos
+
+        repos = [
+            "ffatty/plaintext-wikipedia-full-yoruba",
+            "ffatty/plaintext-wikipedia-full-german",
+            SIMPLE,
+            "ffatty/plaintext-wikipedia-full-english",
+            "ffatty/plaintext-wikipedia-full-serbo-croatian",
+        ]
+        self.assertEqual(select_repos(repos), [
+            SIMPLE,
+            "ffatty/plaintext-wikipedia-full-english",
+            "ffatty/plaintext-wikipedia-full-german",
+            "ffatty/plaintext-wikipedia-full-serbo-croatian",
+            "ffatty/plaintext-wikipedia-full-yoruba",
+        ])
+        self.assertEqual(select_repos(repos, "serbo-croatian,english"), [
+            "ffatty/plaintext-wikipedia-full-english",
+            "ffatty/plaintext-wikipedia-full-serbo-croatian",
+        ])
+        with self.assertRaisesRegex(ValueError, "Unknown/unpublished"):
+            select_repos(repos, "not-an-edition")
+
+    def test_kaggle_remote_fast_path_downloads_manifest_only(self):
+        from scripts.structured_kaggle import remote_is_current
+
+        provenance = {"version": 1, "archives": [{"articles": 3}]}
+        planned = [
+            ("data/simplewiki.txt.gz", "a" * 64, None),
+            ("structured/parquet/simplewiki.parquet", "b" * 64, 123),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            commands = []
+
+            def fake_run(*args, check=True):
+                commands.append(args)
+                if args[0] == "files":
+                    return SimpleNamespace(
+                        returncode=0,
+                        stdout="name,size\nsimplewiki.txt.gz,222\nsimplewiki.parquet,123\nstructured-manifest.json,500\n",
+                    )
+                if args[0] == "download":
+                    self.assertIn("-f", args)
+                    probe = Path(args[args.index("-p") + 1])
+                    (probe / "structured-manifest.json").write_text(json.dumps(provenance))
+                    return SimpleNamespace(returncode=0, stdout="")
+                raise AssertionError(args)
+
+            with patch("scripts.structured_kaggle.run", side_effect=fake_run):
+                self.assertTrue(remote_is_current("ffatty/wiki", provenance, planned, Path(folder)))
+                self.assertEqual([cmd[0] for cmd in commands], ["files", "download"])
+                self.assertFalse(remote_is_current("ffatty/wiki", {"version": 2},
+                                                   planned, Path(folder)))
+
+    def test_kaggle_fast_path_does_not_ignore_obsolete_sqlite(self):
+        from scripts.structured_kaggle import remote_is_current
+
+        def fake_run(*args, check=True):
+            if args[0] == "files":
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout="name\nsource.txt.gz\nsource.parquet\nstructured-manifest.json\nold.sqlite.zst\n",
+                )
+            raise AssertionError("Must not download any remote files")
+
+        with tempfile.TemporaryDirectory() as folder:
+            with patch("scripts.structured_kaggle.run", side_effect=fake_run):
+                self.assertFalse(remote_is_current(
+                    "ffatty/wiki", {"version": 1}, [
+                        ("data/source.txt.gz", "a" * 64, None),
+                        ("structured/parquet/source.parquet", "b" * 64, 123),
+                    ], Path(folder)))
+
+
 class TestCIContracts(unittest.TestCase):
     def test_new_release_workflows_are_manual_only(self):
         for name in ("structured-fleet.yml", "zenodo-parquet.yml",
