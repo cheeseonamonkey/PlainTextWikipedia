@@ -191,6 +191,7 @@ class TestParquetOnlyPublishing(unittest.TestCase):
                 if args[0] == "download":
                     stage = Path(args[args.index("-p") + 1])
                     (stage / raw_name).write_bytes(raw.read_bytes())
+                    (stage / f"{stem}.sqlite.zst").write_bytes(b"legacy-sqlite")
                     return SimpleNamespace(returncode=0, stdout="")
                 if args[0] == "version":
                     stage = Path(args[args.index("-p") + 1])
@@ -211,6 +212,40 @@ class TestParquetOnlyPublishing(unittest.TestCase):
             self.assertIn(raw_name, publish)
             self.assertIn("structured-manifest.json", publish)
             self.assertFalse(any("sqlite" in name for name in publish))
+
+
+    def test_fleet_build_only_publishes_parquet(self):
+        import gzip
+        import hashlib
+        from scripts.structured_fleet import build
+
+        repo = "ffatty/plain-text-wikipedia-simpleenglish"
+        name = "simplewiki_01_of_01"
+        with tempfile.TemporaryDirectory() as folder:
+            raw = Path(folder) / f"{name}.txt.gz"
+            with gzip.open(raw, "wt", encoding="utf-8") as stream:
+                stream.write("Title\\nBody\\n\\n")
+            with raw.open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            source = SimpleNamespace(path=f"data/{raw.name}",
+                                     lfs={"sha256": digest}, size=raw.stat().st_size)
+            uploaded = []
+
+            def upload_file(*, path_in_repo, path_or_fileobj, **kwargs):
+                file = Path(path_or_fileobj)
+                self.assertTrue(file.is_file())
+                uploaded.append(path_in_repo)
+
+            with (patch.dict(os.environ, {"HF_TOKEN": "test-token"}),
+                  patch("scripts.structured_fleet.HfApi") as api,
+                  patch("scripts.structured_fleet.hf_hub_download", return_value=str(raw))):
+                api.return_value.list_repo_tree.return_value = [source]
+                api.return_value.upload_file.side_effect = upload_file
+                build(repo)
+            self.assertEqual(sorted(uploaded), [
+                f"structured/manifests/{name}.parquet.json",
+                f"structured/parquet/{name}.parquet",
+            ])
 
 
 class TestCIContracts(unittest.TestCase):
