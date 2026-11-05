@@ -13,7 +13,8 @@ import numpy as np
 import zstandard as zstd
 
 from scripts.article_features import (
-    DENSE_DIMS, build, dequantize, fold, quantize, tokens,
+    DENSE_DIMS, FUSION_IMPORTANCE, build, combined_vector, dequantize,
+    fold, lexical_hash, quantize, tokens,
 )
 from scripts.bekko_features import embedding_input
 
@@ -95,6 +96,24 @@ class ArticleFeaturesTests(unittest.TestCase):
             self.assertGreaterEqual(float(row["saliency"]), 0)
             self.assertGreaterEqual(float(row["vocab_coverage"]), 0)
             self.assertLessEqual(float(row["vocab_coverage"]), 1)
+            for field in ("normalized_entropy", "simpson_diversity",
+                          "hapax_token_ratio", "rare_token_ratio",
+                          "rare_term_ratio", "keyword_token_share",
+                          "keyword_title_overlap", "title_tfidf_share",
+                          "bm15_top5_share", "extractive_position",
+                          "extractive_margin", "lead_keyword_overlap",
+                          "vector_active_fraction"):
+                self.assertGreaterEqual(float(row[field]), 0, field)
+                self.assertLessEqual(float(row[field]), 1.00000001, field)
+            self.assertGreaterEqual(float(row["sentence_length_cv"]), 0)
+            self.assertGreaterEqual(float(row["idf_std"]), 0)
+            self.assertGreaterEqual(float(row["bm15_mean"]), 0)
+            self.assertGreaterEqual(float(row["effective_vocabulary"]), 1)
+            self.assertLessEqual(float(row["effective_vocabulary"]),
+                                 int(row["distinct_terms"]) + .00001)
+            self.assertGreater(float(row["vector_quant_cosine"]), .98)
+            self.assertEqual(set(json.loads(row["fusion_component_energy_json"])),
+                             set(FUSION_IMPORTANCE))
         with sqlite3.connect(dbpath) as conn:
             self.assertEqual(conn.execute("PRAGMA quick_check").fetchone()[0], "ok")
             self.assertEqual(conn.execute("SELECT count(*) FROM articles").fetchone()[0], 4)
@@ -128,10 +147,42 @@ class ArticleFeaturesTests(unittest.TestCase):
         self.assertTrue(result["fasttext"]["available"])
         self.assertTrue((dest / "fasttext.bin.zst").exists())
         self.assertTrue(all(row["semantic_available"] == "1" for row in rows))
-        self.assertTrue(np.any(dequantize(rows[0]["vector_q8_b64"],
-                                            rows[0]["vector_scales_b64"])[:96]))
-        self.assertTrue(np.any(dequantize(rows[0]["vector_q8_b64"],
-                                            rows[0]["vector_scales_b64"])[96:160]))
+        combined = dequantize(rows[0]["vector_q8_b64"], rows[0]["vector_scales_b64"])
+        self.assertTrue(np.any(combined[:128]))  # Full Bekko Matryoshka vector.
+        self.assertTrue(np.any(combined[128:176]))  # Projected fastText.
+        self.assertTrue(np.any(combined[176:192]))  # Signed TF-IDF hash.
+        self.assertTrue(np.any(combined[192:]))  # Centered scalar metrics.
+        actual = json.loads(rows[0]["fusion_component_energy_json"])
+        for component, expected in FUSION_IMPORTANCE.items():
+            self.assertAlmostEqual(actual[component], expected, places=5)
+
+    def test_cosine_importance_is_the_requested_share(self):
+        semantic = np.linspace(-1, 1, 160, dtype=np.float32)
+        bekko = np.linspace(-1, 1, 128, dtype=np.float32)
+        lexical = np.linspace(-1, 1, 16, dtype=np.float32)
+        metrics = [.1, .2, .3, .4, .6, .7, .8, .9]
+        mixed, shares = combined_vector(semantic, lexical, metrics, bekko)
+        self.assertEqual(mixed.shape, (200,))
+        self.assertAlmostEqual(float(np.linalg.norm(mixed)), 1., places=6)
+        self.assertEqual(sum((128, 48, 16, 8)), 200)
+        for name, importance in FUSION_IMPORTANCE.items():
+            self.assertAlmostEqual(shares[name], importance, places=6)
+        self.assertAlmostEqual(sum(shares.values()), 1., places=6)
+        self.assertTrue(np.array_equal(
+            mixed, combined_vector(semantic, lexical, metrics, bekko)[0]))
+        _, missing = combined_vector(None, lexical, metrics, bekko)
+        self.assertAlmostEqual(missing["fasttext"], 0., places=6)
+        self.assertAlmostEqual(sum(missing.values()), 1., places=6)
+
+    def test_signed_lexical_hash_does_not_conflate_sign_and_bucket(self):
+        from collections import defaultdict
+        signs = defaultdict(set)
+        for index in range(2048):
+            vector = lexical_hash([(index, 1.)])
+            slot = int(np.argmax(np.abs(vector)))
+            signs[slot].add(int(np.sign(vector[slot])))
+        self.assertEqual(len(signs), 16)
+        self.assertTrue(all(values == {-1, 1} for values in signs.values()))
 
     def test_fasttext_worker_can_train_and_reload(self):
         import fasttext
