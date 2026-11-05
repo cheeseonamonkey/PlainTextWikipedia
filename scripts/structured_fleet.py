@@ -89,17 +89,46 @@ def available_repos(api: HfApi):
     return repos
 
 
-def plan() -> None:
+# Start the expensive editions early to avoid a several-hour tail when
+# smaller matrix jobs finish. Simple English is a cheap initial smoke check.
+LARGE_LANGUAGES = (
+    "english", "german", "french", "japanese", "spanish",
+    "russian", "chinese", "portuguese", "italian", "arabic",
+)
+SIMPLE = "ffatty/plain-text-wikipedia-simpleenglish"
+
+
+def select_repos(repos: list[str], only: str = "") -> list[str]:
+    if only.strip():
+        requested = {word.strip().lower() for word in only.split(",") if word.strip()}
+        names = {repo: repo.rsplit("/", 1)[-1].removeprefix("plaintext-wikipedia-full-")
+                 for repo in repos}
+        matches = [repo for repo in repos
+                   if repo.lower() in requested or names[repo] in requested
+                   or (repo == SIMPLE and "simpleenglish" in requested)]
+        unknown = requested - {value for repo in matches for value in
+                               (repo.lower(), names[repo])} - (
+                                   {"simpleenglish"} if SIMPLE in matches else set())
+        if unknown:
+            raise ValueError(f"Unknown/unpublished Wikipedia datasets: {', '.join(sorted(unknown))}")
+        repos = matches
+    priority = {name: index for index, name in enumerate(LARGE_LANGUAGES)}
+    return sorted(repos, key=lambda repo: (
+        -1 if repo == SIMPLE else priority.get(
+            repo.rsplit("/", 1)[-1].removeprefix("plaintext-wikipedia-full-"), 100),
+        repo,
+    ))
+
+
+def plan(only: str = "") -> None:
     api = HfApi(token=os.getenv("HF_TOKEN") or None)
-    repos = available_repos(api)
-    # Smaller, short names come first; builds remain independent.
-    repos.sort(key=lambda x: (x != "ffatty/plain-text-wikipedia-simpleenglish", x))
-    matrix = {"include": [{"repo": x} for x in repos]}
+    repos = select_repos(available_repos(api), only)
+    matrix = {"include": [{"repo": repo} for repo in repos]}
     output = json.dumps(matrix, separators=(",", ":"))
     if out := os.getenv("GITHUB_OUTPUT"):
         with open(out, "a", encoding="utf-8") as stream:
-            stream.write(f"matrix={output}\n")
-    print(f"Discovered {len(repos)} EXISTING Wikipedia datasets; no new slugs created")
+            stream.write(f"matrix={output}\ntotal={len(repos)}\n")
+    print(f"Queued {len(repos)} EXISTING Wikipedia datasets; no new slugs created")
     for repo in repos:
         print(repo)
 
@@ -133,16 +162,17 @@ def build(repo: str) -> None:
                 source = Path(retry("download source", lambda: hf_hub_download(
                     repo, filename=path, repo_type="dataset", token=token,
                     local_dir=working / "source")))
-                digest_actual = sha256(source)
-                if digest and digest != digest_actual:
-                    raise ValueError(f"Source LFS SHA256 mismatch: {path}")
-                if is_current(digest_actual):
-                    skipped += 1
-                    print(f"SKIP already-current {repo}/{name}", flush=True)
-                    continue
+                # The exporter checksums the compressed source already; avoid
+                # another full-file scan before decompression.
+                if not digest:
+                    digest = sha256(source)
+                    if is_current(digest):
+                        skipped += 1
+                        print(f"SKIP already-current {repo}/{name}", flush=True)
+                        continue
                 result = export(source, working / "output", "parquet")
-                if result["source_sha256"] != digest_actual:
-                    raise ValueError("Export provenance differs from downloaded source")
+                if result["source_sha256"] != digest:
+                    raise ValueError(f"Source LFS SHA256 mismatch: {path}")
 
                 # Publish data first, manifests last; no source files are modified.
                 for kind, artifact in result["artifacts"].items():
@@ -184,12 +214,14 @@ def build(repo: str) -> None:
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("plan")
+    selector = sub.add_parser("plan")
+    selector.add_argument("--only", default="",
+                          help="Comma-separated existing dataset IDs or language slugs")
     b = sub.add_parser("build")
     b.add_argument("--repo", required=True)
     args = p.parse_args()
     if args.command == "plan":
-        plan()
+        plan(args.only)
     else:
         build(args.repo)
 
