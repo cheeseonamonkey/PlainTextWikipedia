@@ -10,7 +10,7 @@ offline checks automatically; it does not read secrets or publish data.
 |---|---|---|
 | Hugging Face | Existing `.txt.gz` + independently checked Parquet + SQLite | Manual `structured-fleet.yml` |
 | Kaggle | New version of **existing** dataset, keeping original files; Parquet + SQLite when staging is safe | Same manual fleet job after HF |
-| Zenodo | **Parquet only**, compact source provenance, persistent DOI | Manual `zenodo-parquet.yml`; `publish` defaults to **false** |
+| Zenodo | **Parquet only**, compact source provenance, persistent DOI | Same manual fleet run (`publish_zenodo=true` by default); separate `zenodo-parquet.yml` also defaults to publish |
 
 The **source-of-truth** is the published HF `data/*.txt.gz` archive.
 Structured exports do not require a new Wikimedia XML download.
@@ -31,7 +31,7 @@ as the current client can import `six` without bringing that package in.
 
 GitHub Actions → **Rebuild structured editions across all published Wikipedias**.
 
-Defaults: Parquet + SQLite, Kaggle mirror requested, maximum **2500 MiB**
+Defaults: **publish all three destinations**, Parquet + SQLite on HF/Kaggle and Parquet only on Zenodo, maximum **2500 MiB**
 compressed staging per Kaggle dataset. The workflow discovers existing published
 HF language repositories; each language runs in an independent matrix job
 (`max-parallel: 3`). Within a language:
@@ -40,10 +40,12 @@ HF language repositories; each language runs in an independent matrix job
 2. Skip current, checksum-matched formats; regenerate only stale/missing formats.
 3. Publish structured artifacts first, provenance manifests last, without touching
    existing raw source files.
-4. If Kaggle CLI authentication passes, stage **the entire existing Kaggle version**
+4. After verifying all three publisher credentials before conversion, stage **the entire existing Kaggle version**
    before adding the verified formats. Skip an unchanged version entirely.
-5. Refuse a Kaggle update if its compressed contents exceed the configured
-   staging budget or file count; HF publication remains independent.
+5. Publish or version the matching Zenodo DOI automatically, with Parquet only.
+6. **Fail visibly** if a required Kaggle update exceeds the staging budget,
+   runner disk or file count; HF and Zenodo publishing remain independent.
+   No 'successful' three-destination release can hide skipped uploads.
 
 **Large languages:** Kaggle full-version uploads can exceed a standard Actions
 runner's disk. A safe Kaggle skip is expected, not a false success or an
@@ -56,14 +58,13 @@ rebuilding the entire corpus, provided source archives have not changed.
 
 ## Zenodo (research archive)
 
-GitHub Actions → **Zenodo Parquet research release**. With the default
-`publish=false`, it checks only inventories, SHA256, file counts, and quota.
-It does not create drafts, upload data or mint DOIs.
+GitHub Actions → **Zenodo Parquet research release**. With the default `publish=true`, the dedicated Zenodo workflow performs a
+Parquet-only release. Set `publish=false` to run checks without uploading.
 
-**Only** enable `publish=true` after reviewing the inventory and record metadata.
-For an existing Zenodo record, supply `existing_record_id` to create a new
-version and preserve the citation chain. Avoid creating a second record
-representing the same edition. Verify the token has `deposit:write` and
+The publisher searches your existing Zenodo depositions before creating a
+record; unchanged manifest fingerprints are skipped and changed ones create
+a new version. You can still supply `existing_record_id` to select a specific
+record. Review the quota and fair-use expectations for very large collections. Verify the token has `deposit:write` and
 `deposit:actions` scopes in addition to read access. Zenodo's default
 per-record limit is 50 GB, with at most 100 files. This exporter uploads
 **Parquet + one provenance.json**, never SQLite or original gzip.
@@ -101,3 +102,24 @@ python -m pip install -r REQUIREMENTS.TXT pyarrow zstandard huggingface_hub kagg
 python -m compileall -q scripts tests
 python -m unittest discover -s tests -v
 ```
+
+## GitHub Actions storage: why the old builds broke
+
+The older XML rebuilds passed multi-GB `.txt.gz` leaves between jobs using
+`actions/upload-artifact`. Those **persisted Actions artifacts** are billed
+against the account's storage quota (potentially as little as 500 MB). Deleting
+temporary files from an ephemeral runner does **not** delete already uploaded
+artifacts. The new structured fleet does **not upload any Actions artifacts**:
+it reads source archives from HF and uploads finished releases to HF, Kaggle,
+and Zenodo instead.
+
+`cleanup-wiki-artifacts.yml` runs after legacy rebuild workflows complete and
+deletes only matching `full-...wiki-N` and `recovered-...wiki-N` intermediate
+artifacts. Temporary files are also scoped to per-shard directories and
+removed on exit. Historical usage may take time to update in GitHub billing.
+
+On the standard runner, Kaggle may exceed disk capacity for the largest
+editions. A size/disk preflight now reports this as a **failed Kaggle release**;
+not an invisible skip. Set `kaggle_stage_mb` appropriately on a runner with
+sufficient capacity. Large editions still require a larger runner or another
+execution environment—this is distinct from the Actions artifact quota.
