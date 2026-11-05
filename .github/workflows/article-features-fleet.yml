@@ -1,0 +1,100 @@
+name: Publish per-language Wikipedia lexical and semantic features
+
+on:
+  workflow_dispatch:
+    inputs:
+      languages:
+        description: Wikimedia codes (simple,en,sh); blank = all existing datasets
+        type: string
+        required: false
+        default: "simple"
+      parallelism:
+        description: Concurrent language builders (1-8)
+        type: number
+        default: 2
+      publish:
+        description: Commit derived feature files into existing Hugging Face datasets
+        type: boolean
+        default: true
+      fts5:
+        description: Build SQLite FTS5 full-text search index
+        type: boolean
+        default: true
+      allow_lexical_only:
+        description: Diagnostic only; fastText failure is fatal by default
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wiki-corpus-features
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      LANGUAGES: ${{ inputs.languages }}
+      PARALLELISM: ${{ inputs.parallelism }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check huggingface_hub
+      - id: discover
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PARALLELISM" =~ ^[0-9]+$ ]] && (( PARALLELISM >= 1 && PARALLELISM <= 8 )) || {
+            echo "::error::parallelism must be 1-8"
+            exit 1
+          }
+          python scripts/structured_fleet.py plan --only "$LANGUAGES"
+
+  build:
+    name: ${{ matrix.repo }}
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.parallelism }}
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: wiki-features-${{ matrix.repo }}
+      cancel-in-progress: false
+    env:
+      REPO: ${{ matrix.repo }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      WANT_PUBLISH: ${{ inputs.publish }}
+      WANT_FTS: ${{ inputs.fts5 }}
+      ALLOW_LEXICAL: ${{ inputs.allow_lexical_only }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU-only dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1 regex
+          python -m pip install --disable-pip-version-check --no-cache-dir 'sentence-transformers[openvino]>=5.0' 'transformers>=4.57,<5'
+      - name: Build/skip and optionally publish full language feature set
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--repo "$REPO" --vocab 10000 --tfidf 5000
+                --train-token-cap 2000000 --sample-mod 4
+                --fasttext-timeout 180 --threads 2)
+          [[ "$WANT_PUBLISH" == true ]] && args+=(--publish)
+          [[ "$WANT_FTS" == true ]] || args+=(--no-fts5)
+          [[ "$ALLOW_LEXICAL" == true ]] && args+=(--allow-lexical-only)
+          SECONDS=0
+          trap 'echo "- Feature phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
+          python scripts/article_features_release.py "${args[@]}"

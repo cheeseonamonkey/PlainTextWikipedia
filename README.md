@@ -3,6 +3,17 @@
 Convert official Wikimedia dumps into independently compressed, UTF-8 plaintext article archives. This maintained fork automates multilingual builds and publishes the output to **Hugging Face** and **Kaggle**, with curated Parquet-only research archives prepared for **Zenodo**.
 
 
+## Per-language lexical and semantic article features
+
+An optional [corpus features workflow](docs/article-features.md) builds a
+separate article-metrics CSV, 10K vocabulary/5K TF-IDF term statistics,
+a compressed SQLite/FTS5 index and a tiny per-language fastText model.
+Each article also gets a **quantized 200D vector** (160 fastText + 32
+TF-IDF hashing + 8 numeric features), plus its underlying word counts,
+sparse TF-IDF/BM15 scores, keywords and extractive metrics.
+Original article files are unchanged. The feature workflow is manual and
+has explicit disk, training and retry limits.
+
 ## Original plaintext + Parquet editions
 
 Existing published plaintext shards are also available as **Zstandard-compressed Parquet** for training and analytics. Each language keeps its original gzip archives and adds Parquet to the **same existing dataset**; no Wikimedia XML reconversion is required. Parquet exports preserve source SHA-256 provenance, with one row per article and inexpensive text metrics (`char_count`, `byte_count`, `word_count`) plus a best-effort `article_url`. Article images require a separate API-backed enrichment pass and are not included. Legacy SQLite files, where already published, are not regenerated. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
