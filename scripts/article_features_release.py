@@ -84,6 +84,23 @@ def is_current(api, repo, source_list, settings, remote):
     return True
 
 
+def canonical_card(api, repo, dest: Path) -> Path | None:
+    try:
+        from scripts.article_feature_card import update_card
+    except ModuleNotFoundError as exc:
+        if exc.name != "scripts":
+            raise
+        from article_feature_card import update_card
+    source = Path(retry("download current HF dataset card", lambda: hf_hub_download(
+        repo_id=repo, filename="README.md", repo_type="dataset", token=api.token)))
+    content = source.read_text(encoding="utf-8")
+    updated = update_card(content)
+    if updated == content:
+        return None
+    dest.write_text(updated, encoding="utf-8")
+    return dest
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True)
@@ -112,6 +129,16 @@ def main():
     api = HfApi(token=os.getenv("HF_TOKEN") or None)
     source_list, remote = inventory(api, args.repo)
     if is_current(api, args.repo, source_list, settings, remote):
+        # Repair dataset discoverability without recalculating any embeddings.
+        if args.publish and api.token:
+            with tempfile.TemporaryDirectory(prefix="wiki-feature-card-") as tmp:
+                card = canonical_card(api, args.repo, Path(tmp) / "README.md")
+                if card:
+                    retry("publish canonical article dataset card", lambda: api.create_commit(
+                        repo_id=args.repo, repo_type="dataset",
+                        operations=[CommitOperationAdd(path_in_repo="README.md",
+                                                       path_or_fileobj=str(card))],
+                        commit_message="Make article-feature Parquet default dataset split"))
         print(f"SKIP current feature edition: {args.repo}", flush=True)
         return
     required = sum(item["bytes"] for item in source_list)
@@ -156,6 +183,10 @@ def main():
                                path_or_fileobj=str(out / name))
             for name in [*report["files"], "manifest.json"]
         ]
+        card = canonical_card(api, args.repo, dest / "README.md")
+        if card:
+            operations.append(CommitOperationAdd(path_in_repo="README.md",
+                                                 path_or_fileobj=str(card)))
         retry("publish feature corpus", lambda: api.create_commit(
             repo_id=args.repo, repo_type="dataset", operations=operations,
             commit_message=f"Corpus features v{VERSION}: {language}"))
