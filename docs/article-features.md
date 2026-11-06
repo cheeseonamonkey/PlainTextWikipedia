@@ -114,11 +114,17 @@ reads only existing HF source archives, builds once per language and publishes
 in one HF commit. Source hashes, configuration, output sizes and hashes decide
 whether to skip a current dataset. The standard 8-shard release and Parquet
 publisher do **not** run this expensive feature build automatically.
+After successful enrichment on Hugging Face, the feature release can also
+version the **same existing Kaggle dataset**, retaining old files and dataset
+history. Kaggle gets the canonical article Parquet, corpus profile, vocabulary,
+fastText model and manifest. The SQLite sidecar is included only when it fits
+the configured size cap; otherwise it stays on Hugging Face. No new Kaggle
+slugs are created.
 
 Large Wikipedia editions may exceed ordinary hosted GitHub runner disk and CPU
-limits. The builder refuses insufficient capacity rather than silently
-truncating sources. Kaggle/Zenodo feature mirroring is not automatic; their
-independent existing source/Parquet releases remain unchanged.
+limits. Both the builder and Kaggle mirror refuse insufficient capacity rather
+than silently truncating sources. Zenodo still releases separately as verified
+original Parquet, not as an embedding-feature mirror.
 
 For local use:
 

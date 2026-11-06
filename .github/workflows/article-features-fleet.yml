@@ -8,6 +8,10 @@ on:
         type: string
         required: false
         default: "simple"
+      mirror_kaggle:
+        description: Update existing Kaggle datasets with complete feature Parquet
+        type: boolean
+        default: true
       parallelism:
         description: Concurrent language builders (1-8)
         type: number
@@ -68,6 +72,7 @@ jobs:
     with:
       repo_id: ${{ matrix.repo }}
       publish: ${{ inputs.publish }}
+      mirror_kaggle: ${{ inputs.mirror_kaggle }}
       fts5: ${{ inputs.fts5 }}
       allow_lexical_only: ${{ inputs.allow_lexical_only }}
     secrets: inherit

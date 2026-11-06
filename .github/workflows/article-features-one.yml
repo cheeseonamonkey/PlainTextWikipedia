@@ -12,6 +12,10 @@ on:
         description: Publish to existing Hugging Face dataset
         type: boolean
         default: true
+      mirror_kaggle:
+        description: Version the existing Kaggle dataset after Hugging Face succeeds
+        type: boolean
+        default: true
       fts5:
         description: Build optional SQLite FTS5 full-text search index
         type: boolean
@@ -28,6 +32,9 @@ on:
       publish:
         type: boolean
         default: true
+      mirror_kaggle:
+        type: boolean
+        default: true
       fts5:
         type: boolean
         default: true
@@ -37,6 +44,8 @@ on:
     secrets:
       HF_TOKEN:
         required: true
+      KAGGLE_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -77,3 +86,27 @@ jobs:
           SECONDS=0
           trap 'echo "- Feature phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
           python scripts/article_features_release.py "${args[@]}"
+
+  kaggle:
+    needs: build
+    if: ${{ needs.build.result == 'success' && inputs.publish && inputs.mirror_kaggle }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    concurrency:
+      group: wiki-feature-kaggle-${{ inputs.repo_id }}
+      cancel-in-progress: false
+    env:
+      REPO: ${{ inputs.repo_id }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub kaggle six
+      - name: Authenticate existing Kaggle account
+        run: python scripts/kaggle_auth.py --owner ffatty
+      - name: Mirror canonical article Parquet and corpus data into current Kaggle dataset
+        run: python scripts/feature_kaggle.py --repo "$REPO" --max-sqlite-mb 512
