@@ -85,6 +85,15 @@ def main() -> None:
     if not secret:
         print("KAGGLE_TOKEN missing")
         raise SystemExit(1)
+    # Report format categories, not secret bytes or secret-derived substrings.
+    cleaned = secret.strip()
+    print("Secret format:",
+          "legacy-json" if cleaned.startswith("{") else
+          "new-API-token" if cleaned.startswith("KGAT_") else
+          "bearer-prefixed" if cleaned.lower().startswith("bearer ") else
+          "multiline" if len(cleaned.splitlines()) > 1 else
+          "opaque-single-line")
+    print("Has internal whitespace:", any(c.isspace() for c in cleaned))
     results = diagnose(secret, "ffatty")
     for mode, cli, rest in results:
         print(f"{mode}: isolated CLI quota={cli}; authenticated REST={rest}")
