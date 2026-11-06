@@ -21,6 +21,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Kaggle CLI
         run: python -m pip install --upgrade kaggle
+      - name: Diagnose isolated CLI authentication and protected REST endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.diagnose_kaggle_auth
       - name: Verify Kaggle credential mode without exposing secrets
         shell: bash
         run: |
