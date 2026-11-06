@@ -50,6 +50,7 @@ class LanguagePipelineTests(unittest.TestCase):
         self.assertNotIn("simplewiki", script)
         self.assertEqual(data["build"]["strategy"]["max-parallel"], "8")
         self.assertIn("--max-depth 3", str(data["build"]))
+        self.assertIn("overwrite", str(data["build"]))
         self.assertEqual(data["publish"]["uses"], "./.github/workflows/publish-wikipedia.yml")
         self.assertEqual(data["publish"]["secrets"], "inherit")
         publisher = workflow("publish-wikipedia.yml")

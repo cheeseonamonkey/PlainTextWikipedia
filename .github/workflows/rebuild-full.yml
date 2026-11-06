@@ -133,6 +133,7 @@ jobs:
           compression-level: 0
           if-no-files-found: warn
           retention-days: 7
+          overwrite: true
       - name: Free runner disk
         if: always()
         run: rm -rf output ranges ranges.txt download-failures.json
