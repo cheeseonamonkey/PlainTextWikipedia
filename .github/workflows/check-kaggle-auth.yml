@@ -19,6 +19,9 @@ jobs:
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install Kaggle CLI
         run: python -m pip install --upgrade kaggle
       - name: Diagnose isolated CLI authentication and protected REST endpoint

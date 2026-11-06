@@ -59,6 +59,9 @@ jobs:
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Resolve language and publishing destinations
         id: resolve
         shell: bash
