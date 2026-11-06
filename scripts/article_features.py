@@ -37,7 +37,7 @@ except ModuleNotFoundError as exc:
         raise
     from repack_shards import records
 
-VERSION = 3
+VERSION = 4
 VOCAB_SIZE = 10_000
 TFIDF_SIZE = 5_000
 DENSE_DIMS = 200
@@ -185,8 +185,8 @@ FASTTEXT_PROJECTION = (np.random.default_rng(2026).choice(
 # Fractions of *cosine similarity* attributable to each independent subspace,
 # not raw amplitude multipliers. Squared amplitudes determine dot-product share.
 FUSION_IMPORTANCE = {
-    "bekko": 0.55, "fasttext": 0.40,
-    "lexical": 0.03, "metrics": 0.02,
+    "bekko": 0.49, "fasttext": 0.45,
+    "lexical": 0.04, "metrics": 0.02,
 }
 
 

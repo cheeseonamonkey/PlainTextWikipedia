@@ -17,13 +17,13 @@ from pathlib import Path
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 
 try:
-    from scripts.article_features import VERSION, build
+    from scripts.article_features import VERSION, FUSION_IMPORTANCE, build
     from scripts.structured_fleet import retry, source_files, source_hash
     from scripts.wiki_metadata import wiki_code
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
-    from article_features import VERSION, build
+    from article_features import VERSION, FUSION_IMPORTANCE, build
     from structured_fleet import retry, source_files, source_hash
     from wiki_metadata import wiki_code
 
@@ -45,6 +45,7 @@ def inventory(api, repo):
 
 def config(args, language):
     return {"version": VERSION, "language": language,
+            "fusion_importance": FUSION_IMPORTANCE,
             "vocab": args.vocab, "tfidf": args.tfidf,
             "train_token_cap": args.train_token_cap,
             "sample_mod": args.sample_mod,

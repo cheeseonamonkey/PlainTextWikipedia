@@ -85,11 +85,11 @@ article-level embedding; fastText training alone uses bounded sampling.
   Transformer representation. The entire article still contributes to
   TF-IDF, all word counts, metrics and fastText pooling. Record the
   Bekko input token count and whether the excerpt was truncated.
-- **200D mixed vector (v3):** preserve **all 128D Bekko**, randomly
+- **200D mixed vector (v4):** preserve **all 128D Bekko**, randomly
   project the 160D fastText vector into 48D, signed-hash the selected
   TF-IDF into 16D, and add eight centered article-level metrics.
-- **Importance weights for cosine similarity:** Bekko 55%, fastText 40%,
-  TF-IDF 3%, scalar metrics 2%. Normalize each block independently,
+- **Importance weights for cosine similarity:** Bekko 49%, fastText 45%,
+  TF-IDF 4%, scalar metrics 2%. Normalize each block independently,
   multiply it by the square root of its target contribution, concatenate,
   then L2 normalize. The published vector stores per-article realized
   component energy in `fusion_component_energy_json`, including any

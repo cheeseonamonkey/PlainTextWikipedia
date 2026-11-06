@@ -156,6 +156,11 @@ class ArticleFeaturesTests(unittest.TestCase):
         for component, expected in FUSION_IMPORTANCE.items():
             self.assertAlmostEqual(actual[component], expected, places=5)
 
+    def test_fusion_weights_match_current_policy(self):
+        self.assertEqual(FUSION_IMPORTANCE, {
+            "bekko": 0.49, "fasttext": 0.45, "lexical": 0.04, "metrics": 0.02,
+        })
+
     def test_cosine_importance_is_the_requested_share(self):
         semantic = np.linspace(-1, 1, 160, dtype=np.float32)
         bekko = np.linspace(-1, 1, 128, dtype=np.float32)
