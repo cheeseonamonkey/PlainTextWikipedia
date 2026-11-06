@@ -49,7 +49,8 @@ def check_cli(auth: dict[str, str]) -> tuple[int, str]:
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                    KAGGLE_CONFIG_DIR=str(config))
         result = subprocess.run(
-            [sys.executable, "-m", "kaggle", "quota", "--format", "json"],
+            [sys.executable, "-m", "kaggle", "datasets", "status",
+             "ffatty/plain-text-wikipedia-simpleenglish", "--format", "json"],
             capture_output=True, text=True, env=env, timeout=40, check=False,
         )
         # Do not emit raw CLI stdout/stderr: some CLIs echo credential values.
@@ -64,6 +65,14 @@ def check_cli(auth: dict[str, str]) -> tuple[int, str]:
             return result.returncode, "HTTP 403"
         if "404" in diagnostics:
             return result.returncode, "HTTP 404"
+        if "traceback" in diagnostics:
+            return result.returncode, "Python traceback"
+        if "authentication" in diagnostics:
+            return result.returncode, "authentication error"
+        if "token" in diagnostics:
+            return result.returncode, "token error"
+        if "usage:" in diagnostics:
+            return result.returncode, "CLI argument error"
         return result.returncode, "other CLI error"
 
 
@@ -96,7 +105,7 @@ def main() -> None:
     print("Has internal whitespace:", any(c.isspace() for c in cleaned))
     results = diagnose(secret, "ffatty")
     for mode, cli, rest in results:
-        print(f"{mode}: isolated CLI quota={cli}; authenticated REST={rest}")
+        print(f"{mode}: isolated CLI status={cli}; authenticated REST={rest}")
     if not any(cli == "authorized" for _, cli, _ in results):
         raise SystemExit("No credential mode was authorized in a clean runner")
 
