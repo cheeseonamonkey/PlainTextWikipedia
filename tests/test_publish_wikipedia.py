@@ -62,13 +62,17 @@ class PublisherTests(unittest.TestCase):
                 raise ValueError("invalid HF card")
             def pass_kaggle(*args):
                 called.append("kaggle")
+            outputs = folder / "github-outputs"
             with (patch("scripts.publish_wikipedia.publish_hf", side_effect=fail),
-                  patch("scripts.publish_wikipedia.publish_kaggle", side_effect=pass_kaggle)):
+                  patch("scripts.publish_wikipedia.publish_kaggle", side_effect=pass_kaggle),
+                  patch.dict("os.environ", {"GITHUB_OUTPUT": str(outputs)})):
                 results = publish(folder, "simplewiki", "Simple English", "hf/test", "kaggle/test",
                                   URL, URL, "hf-secret", "kaggle-secret")
             self.assertEqual(set(called), {"hf", "kaggle"})
             self.assertEqual(results["Kaggle"], "success")
             self.assertTrue(results["Hugging Face"].startswith("failed:"))
+            self.assertIn("hf_success=false", outputs.read_text())
+            self.assertIn("publishers_ok=false", outputs.read_text())
 
     def test_source_archives_are_not_deleted_on_partial_publish(self):
         with tempfile.TemporaryDirectory() as temp:

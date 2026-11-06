@@ -197,6 +197,10 @@ def publish(directory: Path, language: str, name: str,
             print("| Publisher | Result |\n|---|---|", file=out)
             for label, outcome in outcomes.items():
                 print(f"| {label} | {outcome.replace('|', '/')} |", file=out)
+    if os.getenv("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+            print(f"hf_success={'true' if outcomes['Hugging Face'] == 'success' else 'false'}", file=out)
+            print(f"publishers_ok={'true' if all(v == 'success' for v in outcomes.values()) else 'false'}", file=out)
     return outcomes
 
 
@@ -209,8 +213,8 @@ def main() -> None:
                        e["FULL_HF_REPO"], e["FULL_KAGGLE_DATASET"],
                        e["SOURCE_REPO_URL"], e["UPSTREAM_REPO_URL"],
                        e.get("HF_TOKEN", ""), e.get("KAGGLE_TOKEN", ""))
-    if "success" not in outcomes.values():
-        raise SystemExit("No publisher succeeded; retain artifacts for retry")
+    if any(outcome != "success" for outcome in outcomes.values()):
+        raise SystemExit("One or more publishers failed or lacked credentials; retain artifacts for retry")
 
 
 if __name__ == "__main__":

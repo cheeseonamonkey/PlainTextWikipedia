@@ -59,7 +59,15 @@ class LanguagePipelineTests(unittest.TestCase):
         script = str(publisher["jobs"]["publish"]["steps"])
         self.assertIn('--target "$WIKIPEDIA_SHARD_TARGET"', script)
         self.assertIn('inputs.source_run_id || github.run_id', script)
-        self.assertIn("scripts/publish_wikipedia.py", script)
+        self.assertIn("-m scripts.publish_wikipedia", script)
+        self.assertEqual(publisher["jobs"]["zenodo"]["uses"],
+                         "./.github/workflows/structured-wikipedia.yml")
+        self.assertEqual(publisher["jobs"]["zenodo"]["with"]["mirror_kaggle"], "false")
+        self.assertEqual(publisher["jobs"]["zenodo"]["with"]["publish_zenodo"], "true")
+        self.assertIn("hf_success == 'true'", publisher["jobs"]["zenodo"]["if"])
+        self.assertEqual(publisher["jobs"]["publish"]["outputs"]["publishers_ok"],
+                         "${{ steps.publisher.outputs.publishers_ok }}")
+        self.assertEqual(publisher["jobs"]["report"]["needs"], ["publish", "zenodo"])
         self.assertNotIn('!= simplewiki', script)
 
     def test_unlisted_wikipedia_uses_generic_metadata_in_same_pipeline(self):
@@ -81,7 +89,8 @@ class LanguagePipelineTests(unittest.TestCase):
         for language, expected in cases:
             with self.subTest(language=language), tempfile.TemporaryDirectory() as tmp:
                 env = {**os.environ, "LANGUAGE": language, "HF_REPO_INPUT": "",
-                       "KAGGLE_DATASET_INPUT": "", "GITHUB_ENV": str(Path(tmp) / "env")}
+                       "KAGGLE_DATASET_INPUT": "", "GITHUB_ENV": str(Path(tmp) / "env"),
+                       "GITHUB_OUTPUT": str(Path(tmp) / "output")}
                 result = subprocess.run(["bash", "-e", "-c", script], cwd=ROOT,
                                         env=env, capture_output=True, text=True, check=True)
                 settings = dict(line.split("=", 1) for line in Path(env["GITHUB_ENV"]).read_text().splitlines())

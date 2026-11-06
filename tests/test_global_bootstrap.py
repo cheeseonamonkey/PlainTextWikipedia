@@ -39,7 +39,7 @@ class GlobalBootstrapTests(unittest.TestCase):
         self.assertIn("--max-depth 3", self.full_workflow)
         self.assertIn("publish-wikipedia.yml", self.full_workflow)
         publisher = (ROOT / ".github/workflows/publish-wikipedia.yml").read_text()
-        self.assertIn("scripts/publish_wikipedia.py", publisher)
+        self.assertIn("-m scripts.publish_wikipedia", publisher)
         self.assertIn('--target "$WIKIPEDIA_SHARD_TARGET"', publisher)
 
 

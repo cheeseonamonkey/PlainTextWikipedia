@@ -18,15 +18,23 @@ three levels while preserving exact coverage manifests. `rebuild-simple.yml`,
 `refresh-simple.yml`, and `refresh-full-monthly.yml` are only entrypoint/schedule
 wrappers. The monthly English refresh rebuilds the entire edition.
 
-Publishing is shared through `publish-wikipedia.yml` and runs HF and Kaggle
-concurrently using one staged artifact set; each publisher records an independent
-result. The publisher can be dispatched with `source_run_id` and `language` to
-retry publication from retained source artifacts **without repeating conversion**.
+Publishing is shared through `publish-wikipedia.yml`. Hugging Face and Kaggle
+start concurrently against one staged artifact set. After the updated HF source
+is confirmed, a third **independent Zenodo job** builds/reuses checksum-verified
+Parquet and publishes its Zenodo record through `structured-wikipedia.yml`.
+Zenodo needs current verified HF Parquet, so it cannot precede the HF source;
+a Kaggle failure never prevents Zenodo. Each destination has an independently
+reported outcome; the overall workflow fails unless all three succeed.
+
+The publisher can be dispatched with `source_run_id` and `language` to retry
+publication from retained shard artifacts **without repeating XML conversion**.
 Shard artifacts are retained seven days, with cleanup manual-only. A permanent
 HF metadata/authentication error is never retried; identical existing LFS blobs
 are skipped. A Kaggle version is deferred rather than discarding existing Parquet.
-Kaggle requires valid credentials. Zenodo continues in the separate structured
-Parquet workflow, not the original plaintext-publishing stage.
+Kaggle uses the official CLI and requires valid credentials in GitHub Actions'
+`KAGGLE_TOKEN` secret; replacing the CLI with direct API calls does not fix an
+unauthorized token. The dedicated Zenodo workflow remains available for
+Zenodo-only retries after Parquet has been built.
 
 The corpus feature release is separate: after source publication, run
 `article-features-fleet.yml` to regenerate the 200D embeddings. Feature
