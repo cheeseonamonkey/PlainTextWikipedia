@@ -51,9 +51,11 @@ jobs:
           set -euo pipefail
           [[ "$LANGUAGE" =~ ^[a-z][a-z0-9_-]*wiki$ ]] || exit 1
           . config/datasets.env
+          max_shards="$FULL_SHARD_COUNT"
+          [[ "$LANGUAGE" != simplewiki ]] || max_shards="$SIMPLE_SHARD_COUNT"
           plan="$(python scripts/multistream_shards.py plan \
             --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
-            --language "$LANGUAGE" --max-shards "$FULL_SHARD_COUNT")"
+            --language "$LANGUAGE" --max-shards "$max_shards")"
           python - "$plan" >> "$GITHUB_OUTPUT" <<'PY'
           import json,sys
           p=json.loads(sys.argv[1])

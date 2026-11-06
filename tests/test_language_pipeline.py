@@ -36,6 +36,12 @@ class LanguagePipelineTests(unittest.TestCase):
                 self.assertEqual(job["uses"], "./.github/workflows/rebuild-full.yml")
                 self.assertEqual(job["with"]["language"], f"{name}wiki" if name != "simple" else "simplewiki")
 
+    def test_simple_edition_uses_legacy_single_source_shard(self):
+        script = next(step["run"] for step in workflow("rebuild-full.yml")["jobs"]["plan"]["steps"]
+                      if step.get("id") == "plan")
+        self.assertIn('max_shards="$SIMPLE_SHARD_COUNT"', script)
+        self.assertIn('--max-shards "$max_shards"', script)
+
     def test_destination_resolution_reuses_existing_datasets(self):
         data = workflow("rebuild-full.yml")
         publish = data["jobs"]["publish"]
