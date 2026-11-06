@@ -18,6 +18,9 @@ def main() -> None:
     )
     parser.add_argument("output", type=Path, help="directory for compressed text shards")
     parser.add_argument("--shards", type=int, default=1, help="number of stable page-ID shards")
+    parser.add_argument("--compression-level", type=int, choices=range(1, 10),
+                        default=3, metavar="1..9",
+                        help="gzip compression level (default: 3, favoring throughput)")
     parser.add_argument("--prefix", default="wiki", help="output filename prefix")
     parser.add_argument(
         "--output-name",
@@ -35,6 +38,7 @@ def main() -> None:
         args.dumps,
         args.output,
         shard_count=args.shards,
+        compression_level=args.compression_level,
         prefix=args.prefix,
         output_name=args.output_name,
         min_page_id=args.min_page_id,

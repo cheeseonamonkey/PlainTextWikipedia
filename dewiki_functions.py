@@ -15,7 +15,7 @@ import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, TextIO
+from typing import BinaryIO, Iterable, Iterator, TextIO
 
 from html2text import html2text
 import wikitextparser as wtp
@@ -28,15 +28,15 @@ class Article:
     text: str
 
 
-def _open_dump(path: Path) -> TextIO:
+def _open_dump(path: Path) -> BinaryIO:
     suffix = path.name.lower()
     if suffix.endswith(".bz2"):
-        return bz2.open(path, "rt", encoding="utf-8")
+        return bz2.open(path, "rb")
     if suffix.endswith(".xz") or suffix.endswith(".lzma"):
-        return lzma.open(path, "rt", encoding="utf-8")
+        return lzma.open(path, "rb")
     if suffix.endswith(".gz"):
-        return gzip.open(path, "rt", encoding="utf-8")
-    return path.open("rt", encoding="utf-8")
+        return gzip.open(path, "rb")
+    return path.open("rb")
 
 
 def _child_text(element: ET.Element | None, name: str) -> str | None:
@@ -125,7 +125,7 @@ def write_plaintext_shards(
     output_dir: Path,
     shard_count: int = 1,
     prefix: str = "wiki",
-    compression_level: int = 6,
+    compression_level: int = 3,
     output_name: str | None = None,
     min_page_id: int | None = None,
     max_page_id: int | None = None,
