@@ -1,6 +1,5 @@
 """Offline tests for per-language corpus metrics, indexing and int8 vectors."""
 import base64
-import csv
 import gzip
 import json
 import sqlite3
@@ -11,6 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 import zstandard as zstd
+import pyarrow.parquet as pq
 
 from scripts.article_features import (
     DENSE_DIMS, FUSION_IMPORTANCE, build, combined_vector, dequantize,
@@ -54,8 +54,7 @@ class ArticleFeaturesTests(unittest.TestCase):
                            vocab_size=100, shortlist=20,
                            max_train_tokens=100, sample_mod=100,
                            allow_lexical_only=True)
-        with gzip.open(dest / "article-metrics.csv.gz", "rt", encoding="utf-8") as f:
-            rows = list(csv.DictReader(f))
+        rows = pq.read_table(dest / "articles.parquet").to_pylist()
         with gzip.open(dest / "vocabulary.json.gz", "rt", encoding="utf-8") as f:
             vocab = json.load(f)
         original = self.root / "db.sqlite"
@@ -68,6 +67,20 @@ class ArticleFeaturesTests(unittest.TestCase):
         report, rows, vocab, dbpath = self.read_result(dest)
         self.assertEqual(report["documents"], 4)
         self.assertEqual(len(rows), 4)
+        self.assertEqual(rows[0]["text"], "Planets orbit stars. Stars orbit galaxies.")
+        self.assertEqual(len(rows[0]["embedding_200"]), 200)
+        self.assertIn("planets", json.loads(rows[0]["word_counts_all_json"]))
+        self.assertEqual(rows[0]["hapax_count"], 2)
+        self.assertIsNone(rows[0]["contradiction_score"])
+        self.assertIsNotNone(rows[0]["reading_grade"])
+        self.assertIsNotNone(rows[0]["vader_compound"])
+        self.assertTrue(0 <= rows[0]["sentiment_valence_01"] <= 1)
+        self.assertTrue(0 <= rows[0]["technicality_proxy_01"] <= 1)
+        with (dest / "corpus-profile.json").open() as stream:
+            profile = json.load(stream)
+        self.assertEqual(profile["documents"], 4)
+        self.assertEqual(len(profile["vector_centroid"]), 200)
+        self.assertIn("saliency", profile["fields"])
         self.assertEqual(report["vector"]["dimensions"], 200)
         self.assertEqual(report["bekko"]["dimensions"], 128)
         self.assertTrue(report["bekko"]["required"])
@@ -87,7 +100,7 @@ class ArticleFeaturesTests(unittest.TestCase):
                                             row["fasttext_scales_b64"])), 160)
             self.assertEqual(len(dequantize(row["bekko_q8_b64"],
                                             row["bekko_scales_b64"])), 128)
-            self.assertEqual(row["bekko_available"], "1")
+            self.assertEqual(row["bekko_available"], 1)
             self.assertIsInstance(json.loads(row["word_counts_json"]), dict)
             self.assertIsInstance(json.loads(row["tfidf_sparse_json"]), list)
             self.assertIsInstance(json.loads(row["bm15_sparse_json"]), list)
@@ -126,7 +139,8 @@ class ArticleFeaturesTests(unittest.TestCase):
                 "SELECT counts FROM articles WHERE title='Orbit'"
             ).fetchone()[0])))
         self.assertEqual(set(report["files"]), {
-            "article-metrics.csv.gz", "vocabulary.json.gz", "articles.sqlite.zst",
+            "articles.parquet", "corpus-profile.json",
+            "vocabulary.json.gz", "articles.sqlite.zst",
         })
 
     def test_fasttext_semantic_path_with_stub(self):
@@ -142,34 +156,33 @@ class ArticleFeaturesTests(unittest.TestCase):
               patch("scripts.bekko_features.BekkoEncoder", FakeBekko)):
             dest = self.root / "semantic"
             result = build(self.sources, dest, "simple", vocab_size=100, shortlist=20)
-            with gzip.open(dest / "article-metrics.csv.gz", "rt", encoding="utf-8") as f:
-                rows = list(csv.DictReader(f))
+            rows = pq.read_table(dest / "articles.parquet").to_pylist()
         self.assertTrue(result["fasttext"]["available"])
         self.assertTrue((dest / "fasttext.bin.zst").exists())
-        self.assertTrue(all(row["semantic_available"] == "1" for row in rows))
+        self.assertTrue(all(row["semantic_available"] == 1 for row in rows))
         combined = dequantize(rows[0]["vector_q8_b64"], rows[0]["vector_scales_b64"])
         self.assertTrue(np.any(combined[:128]))  # Full Bekko Matryoshka vector.
-        self.assertTrue(np.any(combined[128:176]))  # Projected fastText.
-        self.assertTrue(np.any(combined[176:192]))  # Signed TF-IDF hash.
-        self.assertTrue(np.any(combined[192:]))  # Centered scalar metrics.
+        self.assertTrue(np.any(combined[128:172]))  # Projected fastText.
+        self.assertTrue(np.any(combined[172:188]))  # Signed TF-IDF hash.
+        self.assertTrue(np.any(combined[188:]))  # Centered scalar metrics.
         actual = json.loads(rows[0]["fusion_component_energy_json"])
         for component, expected in FUSION_IMPORTANCE.items():
             self.assertAlmostEqual(actual[component], expected, places=5)
 
     def test_fusion_weights_match_current_policy(self):
         self.assertEqual(FUSION_IMPORTANCE, {
-            "bekko": 0.49, "fasttext": 0.45, "lexical": 0.04, "metrics": 0.02,
+            "bekko": 0.46, "fasttext": 0.43, "lexical": 0.03, "metrics": 0.08,
         })
 
     def test_cosine_importance_is_the_requested_share(self):
         semantic = np.linspace(-1, 1, 160, dtype=np.float32)
         bekko = np.linspace(-1, 1, 128, dtype=np.float32)
         lexical = np.linspace(-1, 1, 16, dtype=np.float32)
-        metrics = [.1, .2, .3, .4, .6, .7, .8, .9]
+        metrics = [.1, .2, .3, .4, .6, .7, .8, .9, .1, .2, .8, .6]
         mixed, shares = combined_vector(semantic, lexical, metrics, bekko)
         self.assertEqual(mixed.shape, (200,))
         self.assertAlmostEqual(float(np.linalg.norm(mixed)), 1., places=6)
-        self.assertEqual(sum((128, 48, 16, 8)), 200)
+        self.assertEqual(sum((128, 44, 16, 12)), 200)
         for name, importance in FUSION_IMPORTANCE.items():
             self.assertAlmostEqual(shares[name], importance, places=6)
         self.assertAlmostEqual(sum(shares.values()), 1., places=6)

@@ -55,7 +55,10 @@ def config(args, language):
             "allow_lexical_only": args.allow_lexical_only,
             "bekko_model": "hotchpotch/bekko-embedding-v1-a8m",
             "bekko_max_tokens": 256,
-            "casefold_all_embeddings": True}
+            "casefold_all_embeddings": True,
+            "diagnostic_schema": 5, "english_vader": "vaderSentiment",
+            "english_readability": "textstat",
+            "canonical_parquet": "articles.parquet"}
 
 
 def is_current(api, repo, source_list, settings, remote):
@@ -72,7 +75,7 @@ def is_current(api, repo, source_list, settings, remote):
     if not isinstance(files, dict) or not files:
         return False
     for name, meta in files.items():
-        target = remote.get(f"features/{name}")
+        target = remote.get(name if name == "articles.parquet" else f"features/{name}")
         if target is None or getattr(target, "size", None) != meta.get("bytes"):
             return False
         digest = source_hash(target)
@@ -148,7 +151,8 @@ def main():
             encoding="utf-8",
         )
         operations = [
-            CommitOperationAdd(path_in_repo=f"features/{name}",
+            CommitOperationAdd(path_in_repo=("articles.parquet" if name == "articles.parquet"
+                                                else f"features/{name}"),
                                path_or_fileobj=str(out / name))
             for name in [*report["files"], "manifest.json"]
         ]

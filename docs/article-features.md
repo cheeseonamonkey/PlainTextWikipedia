@@ -1,149 +1,129 @@
-# Per-language article features
+# Wikipedia article features (schema v5)
 
-A separate enrichment release, with **all stages enabled by default**. Original Wikipedia gzip and structured
-Parquet outputs remain unchanged. The pipeline derives corpus-wide lexical
-statistics and small semantic vectors from **every available article** in one
-existing language dataset.
+Canonical analytical output: **`articles.parquet`**, one file per language, one
+row per article. It contains the original article title and body **plus** all
+per-article features and intermediate measurements. Original source archives
+(`data/*.txt.gz`) and optional per-shard Parquet exports remain untouched.
 
-Use the [manual feature fleet](../.github/workflows/article-features-fleet.yml).
-Select languages "simple,en" for a smoke test, or leave blank to queue all
-existing published Wikipedia editions. Language vocabularies and models are
-independent and **not inherently aligned across languages**.
+The companion `features/` directory stores only corpus-level artifacts:
 
-## Published outputs
-
-All files are added to the same Hugging Face dataset under features/:
-
-| Filename | Contents |
+| File | Purpose |
 |---|---|
-| article-metrics.csv.gz | One CSV row per article; full metric set, sparse lexical vectors, separate 160D fastText + 128D Bekko vectors and a combined 200D vector, all quantized |
-| vocabulary.json.gz | Up to 10,000 corpus terms: ID, total count, document frequency, smoothed IDF and 5K TF-IDF selection flag |
-| articles.sqlite.zst | Compressed SQLite: source article text, full per-article compressed word-count JSON, term totals, vocabulary, article metrics and optional FTS5 index |
-| fasttext.bin.zst | Language-specific fastText CBOW model (required by default) |
-| manifest.json | Source hashes, file hashes, schema/config, model status, vector decoding scheme |
+| `articles.parquet` (dataset root) | Primary article table, full text, counts, metrics, nested 200D embedding, raw standalone vectors and reproducibility data |
+| `features/corpus-profile.json` | Entire-corpus numeric means, population deviations, extrema, sampled p05/p50/p95, combined-vector centroid |
+| `features/vocabulary.json.gz` | Top 10K terms, TF/DF/IDF, flags for selected 5K TF-IDF terms |
+| `features/articles.sqlite.zst` | Optional searchable sidecar: every article, **all word counts**, every term's total TF/DF, vocabulary, metrics, FTS5 |
+| `features/fasttext.bin.zst` | Trained per-language CBOW model with 160 dimensions |
+| `features/manifest.json` | Source and artifact hashes, model configuration and decoding instructions |
 
-Original dumps may be partial; features only represent already-published articles.
+The Parquet is a single file with multiple row groups, not a single massive
+memory allocation. Read it directly with DuckDB, Polars, pandas or PyArrow.
+The SQLite sidecar is a compressed **actual SQLite database**, more useful
+than a SQL text dump (`.sql.gz`) when restored because indexes and FTS5 are
+preserved. No uncompressed copies are shipped. Corpus coverage may be partial
+if the original published Wikipedia conversion was partial.
 
-## Text normalization
+## Per-article columns
 
-Unicode NFKC normalization plus Unicode case folding (language-independent)
-and folding of common typographic quotes, dashes and spacing. **Every vocabulary
-term, TF-IDF feature, fastText training token, and Bekko input uses this folded
-form, for all languages.** Original article titles and text remain unchanged. No transliteration to ASCII: preserve accents and
-non-Latin scripts. Unicode word extraction including combining marks, with overlapping character
-bigrams for unsegmented CJK/Thai runs. This is deliberately lightweight and
-not a sophisticated language-specific morphological tokenizer.
+### Original and intermediate data
 
-Stopwords use Stopwords ISO for supported languages, an English fallback and
-automatic exclusion of terms found in more than 80% of documents. Select
-up to 10K terms by corpus frequency, then up to 5K for TF-IDF using
-term frequency weighted by smoothed IDF.
+- `text`, `title`, `article_url`, `source_file`, `source_ordinal`.
+- All original token counts (`word_counts_all_json`), filtered-vocabulary
+  counts (`word_counts_json`), normalized sparse TF-IDF and BM15 score arrays,
+  top keywords and representative extractive sentence.
+- Token, character, byte, sentence, vocabulary, distinct-word, hapax,
+  stopword, selected-vocabulary, TF-IDF-token, digit and punctuation **counts**;
+  coverage ratios and intermediate TF-IDF/BM15 sums.
+- Original and quantized components: `embedding_200` is a native fixed-length
+  **list of 200 float16 values**. Compact int8 encodings and float16 scale
+  columns for the combined, 128D Bekko and 160D fastText vectors are also
+  preserved. Decode with `scripts.article_features.dequantize`.
 
-The SQLite database retains **all unfiltered word counts per article**, not
-just the vocabulary words. CSV stores the selected 10K word counts plus
-complete 5K sparse TF-IDF and BM15 score arrays as JSON cells.
+### Lexical and extractive scores
 
-## Per-article metrics
+- Lexical diversity, normalized/Shannon entropy, Simpson diversity, effective
+  vocabulary, hapax ratios, repetition, rarity, mean term frequency, IDF mean
+  and deviation, frequency/coverage ratios, long-tail and title overlap.
+- TF-IDF L2/max/top-five share/entropy, BM15 sum/mean/max/top-five share,
+  keyword share, saliency, title relevance, lead relevance, extractive sentence
+  position/margin, sentence-length CV and lead keyword overlap.
+- Quantization fidelity (`vector_quant_cosine`), activity rate and realized
+  embedding subspace energies.
 
-| Category | Fields |
-|---|---|
-| Provenance | source_file, source_ordinal, title, article_url |
-| Length | token_count, char_count, byte_count, sentence_count, mean_sentence_tokens, mean_token_chars |
-| Richness | distinct_terms, lexical_diversity, hapax_ratio, entropy, repetition_ratio |
-| Distribution | stopword_ratio, oov_or_filtered_ratio, digit_ratio, punctuation_ratio, vocab_coverage, tfidf_coverage |
-| Importance | mean_idf, max_tfidf, tfidf_l2, tfidf_top5_share, tfidf_entropy, bm15_sum, bm15_max |
-| Extractive | saliency, title_overlap, lead_relevance, representative_sentence, keywords_json |
-| Additional diversity/rarity | effective_vocabulary, normalized_entropy, simpson_diversity, hapax_token_ratio, rare_token_ratio, rare_term_ratio, mean_term_frequency, idf_std |
-| Additional topical / BM15 | keyword_token_share, keyword_title_overlap, title_tfidf_share, bm15_mean, bm15_top5_share |
-| Sentence diagnostics | sentence_length_cv, extractive_position, extractive_margin, lead_keyword_overlap |
-| Fusion diagnostics | vector_quant_cosine, vector_active_fraction, fusion_component_energy_json |
-| Intermediate | word_counts_json, tfidf_sparse_json, bm15_sparse_json |
-| Embedding | vector_q8_b64, vector_scales_b64; fasttext_q8_b64, fasttext_scales_b64; bekko_q8_b64, bekko_scales_b64; bekko_input_tokens, bekko_truncated, bekko_available, semantic_available, fasttext_training_tokens |
+### Heuristic and model-derived diagnostics
 
-Smoothed TF-IDF uses (1 + ln(tf)) × (ln((N+1)/(df+1)) + 1).
-BM15 uses a BM25-family formula with k1=1.5 and b=0.75 and average
-document length. "Saliency" here is the relative share of the highest
-weighted TF-IDF term; it is **not** a causal or deep-learning saliency score.
-A representative sentence is selected from the first 80 article sentences
-using keyword-weighted lexical relevance; it is extractive, not generated.
-TF-IDF token counts are not counts for any particular LLM tokenizer.
+- `saliency`, `sentiment_valence_01`, `sentiment_intensity_01`,
+  `reading_difficulty_01`, `technicality_proxy_01`, and
+  `lexical_cohesion_01` are bounded in **0–1**; they are *different measures*,
+  not one probability. Avoid comparing their values as if calibrated.
+- VADER: `vader_compound` (−1 to 1), `vader_positive`, `vader_neutral`,
+  `vader_negative`; normalized valence is `(compound + 1)/2`, where **0.5 is
+  neutral**. Takes first 3,072 and last 1,024 characters (or entire shorter
+  article); actual sample length is recorded. **English only**; null otherwise.
+- Readability: raw Flesch-Kincaid grade and Flesch Reading Ease, plus an
+  explicitly heuristic bounded difficulty `min(1, max(0, grade/20))`.
+  Computed on first 2,048 characters; **English only**; null otherwise.
+  Readability formulas are approximations, not evaluations of truth.
+- `technicality_proxy_01`: transparent weighted heuristic of rare vocabulary,
+  word length, IDF and digit density; *not a technical-topic classifier*.
+- `lexical_cohesion_01`: average adjacent-sentence token-set Jaccard in the
+  first 12,000 characters; approximates local topical continuity, **not
+  absence of contradictions**. `contradiction_score` is null until a real NLI
+  model evaluates contradictions. Missing measurements remain null in Parquet,
+  not fabricated zero-confidence scores.
 
-## Per-article Bekko + fastText and combined 200D vector
+## 200-dimensional combined representation
 
-**Every article** is encoded by both models by default. No sampling for
-article-level embedding; fastText training alone uses bounded sampling.
+The v5 vector includes **all 128D multilingual Bekko**, a deterministic
+44D projection of the separate 160D per-language fastText model, a 16D signed
+TF-IDF hash and 12 normalized scalar metrics. Importance in cosine similarity:
 
-- **160D standalone fastText:** TF-IDF-weighted, normalized word embeddings
-  trained with a separate small CBOW model per language. One epoch,
-  up to 2M sampled training tokens, 30K subword buckets, two CPU threads,
-  180-second training timeout.
-- **128D standalone Bekko:** the multilingual
-  `hotchpotch/bekko-embedding-v1-a8m` model via CPU OpenVINO.
-  Each title and bounded article lead is Unicode-NFKC case-folded and
-  encoded with at most 256 model tokens, in 16-article batches.
-  **This is a partial-context article embedding**, not a full-document
-  Transformer representation. The entire article still contributes to
-  TF-IDF, all word counts, metrics and fastText pooling. Record the
-  Bekko input token count and whether the excerpt was truncated.
-- **200D mixed vector (v4):** preserve **all 128D Bekko**, randomly
-  project the 160D fastText vector into 48D, signed-hash the selected
-  TF-IDF into 16D, and add eight centered article-level metrics.
-- **Importance weights for cosine similarity:** Bekko 49%, fastText 45%,
-  TF-IDF 4%, scalar metrics 2%. Normalize each block independently,
-  multiply it by the square root of its target contribution, concatenate,
-  then L2 normalize. The published vector stores per-article realized
-  component energy in `fusion_component_energy_json`, including any
-  absent/zero blocks. These weights are design defaults, **not benchmark-tuned**.
-- Signed hashing now uses independent bucket/sign bits to avoid a bias
-  that previously forced even and odd hash buckets to fixed signs.
+| Component | Dimensions | Importance |
+|---|---:|---:|
+| Bekko | 128 | 46% |
+| FastText projection | 44 | 43% |
+| Sparse TF-IDF signed hash | 16 | 3% |
+| Metrics (including VADER) | 12 | 8% |
 
-Both standalone embeddings and the combined representation are saved.
-The 128D Bekko vectors can be compared *across languages* approximately;
-per-language fastText and the combined vectors are **not aligned across languages**.
+Each block is L2-normalized and multiplied by the square root of its weight;
+then the complete vector is normalized. Metric fields include length, lexical
+richness, vocabulary/TF-IDF coverage, mean IDF, saliency, title overlap,
+entropy, valence, sentiment intensity, technicality and lexical cohesion.
+Missing model scores are centered at 0.5 only **inside the embedding** and
+remain null in the article table. Weights are design choices, not validated
+against a retrieval benchmark. The original fastText/Bekko vectors and the
+realized block-energy ratios remain available for different weighting.
 
-All vectors use symmetric signed-int8 quantization with one float16 scale
-per block of 32 dimensions: 160/128/200 signed bytes respectively,
-plus 10/8/14 bytes of per-block scales before base64 encoding.
-Decode with `scripts.article_features.dequantize(encoded, scales)`.
+Bekko: `hotchpotch/bekko-embedding-v1-a8m` with CPU/OpenVINO, NFKC-casefolded
+title and bounded article lead (max 256 model tokens), 16 articles per batch.
+This is *not* a full-text transformer embedding. Entire texts are used for
+TF-IDF, corpus counts and fastText pooling; separate fastText trains one epoch
+on up to 2M sampled tokens. The Bekko 128D representation is approximately
+cross-language compatible. The fastText models and **combined vectors are not
+cross-language aligned**. No silent missing-model fallback is permitted in
+full releases.
 
-There is **no silent Bekko fallback**: unavailable dependencies, invalid
-model output, or partial encoding fail the job. fastText also fails by
-default if training fails; the `allow_lexical_only` switch exists only
-for explicit diagnostics and marks missing fastText components as unavailable.
+Quantization: signed int8 per 32-vector block, float16 scale, fixed seed 2026
+for fastText projection, independent BLAKE2s bits for lexical bucket and sign.
+Different fastText training runs can vary slightly due to stochastic CPU work.
 
-The fastText random projection (seed 2026), BLAKE2s signed lexical hashing, and vector quantization are deterministic.
-Multi-threaded fastText training is stochastic; the released model and
-manifest are the reproducibility reference. Case folding can discard
-acronym/proper-name distinctions and does not guarantee faster Bekko
-inference. Its benefit is normalization consistency.
+## Operational behavior
 
-## SQLite FTS5 and performance
+The manual [`article-features-fleet.yml`](../.github/workflows/article-features-fleet.yml)
+reads only existing HF source archives, builds once per language and publishes
+in one HF commit. Source hashes, configuration, output sizes and hashes decide
+whether to skip a current dataset. The standard 8-shard release and Parquet
+publisher do **not** run this expensive feature build automatically.
 
-**FTS5 is a SQLite full-text search index**, not an embedding algorithm.
-It is built as an external-content index over the articles table. Query
-the unpacked DB with SQL such as:
+Large Wikipedia editions may exceed ordinary hosted GitHub runner disk and CPU
+limits. The builder refuses insufficient capacity rather than silently
+truncating sources. Kaggle/Zenodo feature mirroring is not automatic; their
+independent existing source/Parquet releases remain unchanged.
 
-    SELECT title FROM article_fts WHERE article_fts MATCH 'orbit' LIMIT 5;
+For local use:
 
-FTS5's Unicode tokenizer is not a full CJK segmenter. The FTS index can be
-disabled without losing the ordinary article metrics or counts.
-
-The pipeline streams source gzip archives once to a temporary SQLite corpus,
-then calculates vocabulary and metrics from stored compressed counts.
-fastText uses a capped training sample; Bekko runs on every article with bounded input.
-There are no per-article API calls.
-When source hashes, config and artifact checksums match a published release,
-the workflow skips it. New artifacts are published to Hugging Face in one
-atomic commit. A conservative disk preflight prevents giant languages
-from exhausting hosted runners.
-
-Runtime will vary by language, indexing cost and runner capacity; there is
-no measured guarantee that this takes less than half of conversion runtime.
-Very large editions may require larger runners. The workflow is manual and
-does not run as part of standard Parquet publication.
-
-Local usage:
-
-    python -m pip install numpy zstandard fasttext-wheel stopwordsiso==0.7.1
-    python -m pip install 'sentence-transformers[openvino]>=5.0' 'transformers>=4.57,<5'
-    python scripts/article_features.py data/*.txt.gz --language en --output article-features --vocab 10000 --tfidf 5000
+```bash
+python -m pip install numpy pyarrow zstandard fasttext-wheel regex stopwordsiso==0.7.1 vaderSentiment textstat
+python -m pip install 'sentence-transformers[openvino]>=5.0' 'transformers>=4.57,<5'
+python scripts/article_features.py data/*.txt.gz --language en --output article-features
+```

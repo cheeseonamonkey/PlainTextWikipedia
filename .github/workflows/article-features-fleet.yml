@@ -51,10 +51,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$PARALLELISM" =~ ^[0-9]+$ ]] && (( PARALLELISM >= 1 && PARALLELISM <= 8 )) || {
+          if ! [[ "$PARALLELISM" =~ ^[0-9]+$ ]] || (( PARALLELISM < 1 || PARALLELISM > 8 )); then
             echo "::error::parallelism must be 1-8"
             exit 1
-          }
+          fi
           python scripts/structured_fleet.py plan --only "$LANGUAGES"
 
   build:
@@ -83,7 +83,7 @@ jobs:
           python-version: "3.12"
       - name: Install CPU-only dependencies
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1 regex
+          python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1 regex pyarrow vaderSentiment textstat
           python -m pip install --disable-pip-version-check --no-cache-dir 'sentence-transformers[openvino]>=5.0' 'transformers>=4.57,<5'
       - name: Build/skip and optionally publish full language feature set
         shell: bash
@@ -92,9 +92,9 @@ jobs:
           args=(--repo "$REPO" --vocab 10000 --tfidf 5000
                 --train-token-cap 2000000 --sample-mod 4
                 --fasttext-timeout 180 --threads 2)
-          [[ "$WANT_PUBLISH" == true ]] && args+=(--publish)
-          [[ "$WANT_FTS" == true ]] || args+=(--no-fts5)
-          [[ "$ALLOW_LEXICAL" == true ]] && args+=(--allow-lexical-only)
+          if [[ "$WANT_PUBLISH" == true ]]; then args+=(--publish); fi
+          if [[ "$WANT_FTS" != true ]]; then args+=(--no-fts5); fi
+          if [[ "$ALLOW_LEXICAL" == true ]]; then args+=(--allow-lexical-only); fi
           SECONDS=0
           trap 'echo "- Feature phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
           python scripts/article_features_release.py "${args[@]}"
