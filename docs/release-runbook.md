@@ -4,6 +4,24 @@ This project publishes **updates to existing dataset IDs**, not new datasets per
 Release workflows are **manual-only**. The regular `test.yml` workflow runs
 offline checks automatically; it does not read secrets or publish data.
 
+## Uniform Wikimedia rebuilds
+
+Every Wikimedia edition uses `.github/workflows/rebuild-full.yml` for source
+selection, download, adaptive conversion, coverage validation, and publishing.
+The `language` project code (for example `simplewiki`, `enwiki`, or
+`frwiki`) determines source URLs and existing dataset destinations. Size and
+source layout determine processing concurrency. Simple English retains its
+legacy single gzip archive and dataset IDs; larger editions may publish up to
+16 archives. `rebuild-simple.yml`, `refresh-simple.yml`, and
+`refresh-full-monthly.yml` are entrypoint/schedule wrappers, not independent
+pipelines. A monthly full English refresh now rebuilds the complete edition,
+not a rotating single shard.
+
+The corpus feature release is separate: after source publication, run
+`article-features-fleet.yml` to regenerate the 200D embeddings. Feature
+fusion policy is versioned; changing its weights does **not** mutate already
+published feature files until their feature job runs successfully.
+
 ## Three destinations
 
 | Destination | Contents | Trigger |

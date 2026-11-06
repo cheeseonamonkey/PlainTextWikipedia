@@ -106,8 +106,8 @@ def split_archive(file: Path, parts: int, staging: Path, min_bytes: int = 0) -> 
 
 
 def repack(directory: Path, target: int = 16, min_bytes: int = 0) -> dict:
-    if target < 2 or target > 64 or min_bytes < 0:
-        raise ValueError("Target must be in [2,64] and minimum size nonnegative")
+    if not 1 <= target <= 64 or min_bytes < 0:
+        raise ValueError("Target must be in [1,64] and minimum size nonnegative")
     reports = []
     for path in sorted(directory.glob("*.manifest.json")):
         report = json.loads(path.read_text(encoding="utf-8"))
@@ -124,6 +124,7 @@ def repack(directory: Path, target: int = 16, min_bytes: int = 0) -> dict:
             if source.is_file() and "_part" not in source.name:
                 eligible.append((path, report, leaf, source))
     current_count = sum(len(r.get("successful_leaves", [])) for _,r in reports)
+    # A one-archive edition (Simple English) keeps its existing stable name.
     if current_count >= target or not eligible:
         return {"repacked":0,"files_before":current_count,
                 "files_after":current_count,"reason":"Already sharded or no valid inputs"}

@@ -1,15 +1,10 @@
 name: Build all Wikipedia languages
 run-name: Rebuild 10 Wikipedia editions
 
+# Full multi-edition rebuilds are intentionally manual to avoid accidental
+# multi-GB work on workflow/config changes.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - .github/workflows/rebuild-languages.yml
-      # A reusable converter change should not automatically rebuild ten gigantic wikis.
-      # Trigger the full batch manually or when the list/config itself changes.
-      - config/datasets.env
 
 permissions:
   contents: read
@@ -22,7 +17,9 @@ concurrency:
 jobs:
   simple:
     name: Simple English
-    uses: ./.github/workflows/rebuild-simple.yml
+    uses: ./.github/workflows/rebuild-full.yml
+    with:
+      language: simplewiki
     secrets: inherit
   no:
     needs: simple

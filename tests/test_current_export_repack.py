@@ -83,6 +83,16 @@ class RepackTests(unittest.TestCase):
         (root/f"{language}_01_of_01.manifest.json").write_text(json.dumps(manifest))
         return path
 
+    def test_single_output_policy_preserves_legacy_simplewiki_filename(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = self.make_file(root, 33, "simplewiki")
+            result = repack(root, target=1)
+            self.assertEqual(result["repacked"], 0)
+            self.assertEqual(result["files_after"], 1)
+            self.assertTrue(source.exists())
+            self.assertEqual(inspect("simplewiki", 1, root)["published_archives"], 1)
+
     def test_one_input_file_yields_sixteen_published_archives(self):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td)

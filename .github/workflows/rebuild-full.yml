@@ -161,10 +161,15 @@ jobs:
           kaggle_id="$KAGGLE_DATASET_INPUT"
           if [[ -z "$hf_id" ]]; then hf_id="${!hf_key:-}"; fi
           if [[ -z "$kaggle_id" ]]; then kaggle_id="${!kaggle_key:-}"; fi
+          if [[ "$LANGUAGE" == "simplewiki" ]]; then
+            [[ -n "$hf_id" ]] || hf_id="$SIMPLE_HF_REPO"
+            [[ -n "$kaggle_id" ]] || kaggle_id="$SIMPLE_KAGGLE_DATASET"
+          fi
           case "$code" in
             en) name=English ;; es) name=Spanish ;; fr) name=French ;;
             de) name=German ;; it) name=Italian ;; pt) name=Portuguese ;;
             ru) name=Russian ;; zh) name=Chinese ;; no) name=Norwegian ;;
+            simple) name="Simple English" ;;
             *) name="" ;;
           esac
           if [[ -z "$name" ]]; then
@@ -186,12 +191,14 @@ jobs:
           pattern: full-${{ inputs.language }}-*
           merge-multiple: true
           path: publish
-      - name: Losslessly repack completed leaves into 16 published archives
+      - name: Losslessly repack completed leaves for publication
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/repack_shards.py --directory publish --target 16 --min-mb 20
+          target=16
+          [[ "$LANGUAGE" != simplewiki ]] || target=1
+          python scripts/repack_shards.py --directory publish --target "$target" --min-mb 20
       - name: Inspect successful leaves, verify exact recovery coverage
         if: always()
         id: inspect
@@ -298,10 +305,12 @@ jobs:
           import json, os
           from pathlib import Path
           e = os.environ
-          meta = json.loads(Path("kaggle-metadata-full.json").read_text())
+          template = "kaggle-metadata.json" if e["LANGUAGE"] == "simplewiki" else "kaggle-metadata-full.json"
+          meta = json.loads(Path(template).read_text())
           meta["id"] = e["FULL_KAGGLE_DATASET"]
           meta["title"] = f'Plaintext Wikipedia ({e["LANG_NAME"]})'
-          meta["description"] = meta["description"].replace("English", e["LANG_NAME"])
+          if e["LANGUAGE"] != "simplewiki":
+              meta["description"] = meta["description"].replace("English", e["LANG_NAME"])
           meta["description"] = meta["description"].replace("__REPO_URL__", e["SOURCE_REPO_URL"])
           meta["description"] = meta["description"].replace("__UPSTREAM_URL__", e["UPSTREAM_REPO_URL"])
           manifest = json.loads(Path("publish/build-manifest.json").read_text())
