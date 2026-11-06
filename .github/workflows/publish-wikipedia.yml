@@ -145,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check huggingface_hub kaggle six
-          python scripts/publish_wikipedia.py --directory publish
+          python -m scripts.publish_wikipedia --directory publish
       - name: Report empty or corrupt source staging
         if: ${{ steps.inspect.outputs.available != 'true' }}
         run: |
