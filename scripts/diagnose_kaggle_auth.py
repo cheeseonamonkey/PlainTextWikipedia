@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
-import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -49,7 +48,7 @@ def check_cli(auth: dict[str, str]) -> tuple[int, str]:
         env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                    KAGGLE_CONFIG_DIR=str(config))
         result = subprocess.run(
-            [sys.executable, "-m", "kaggle", "datasets", "status",
+            ["kaggle", "datasets", "status",
              "ffatty/plain-text-wikipedia-simpleenglish", "--format", "json"],
             capture_output=True, text=True, env=env, timeout=40, check=False,
         )

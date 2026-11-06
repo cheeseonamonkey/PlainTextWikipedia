@@ -51,7 +51,7 @@ class KaggleAuthTests(unittest.TestCase):
                 self.assertEqual(verify_and_configure("test-token", "ffatty",
                                     home=Path(tmp)), "access-token")
             cmd = run.call_args.args[0]
-            self.assertEqual(cmd[3:5], ["datasets", "status"])
+            self.assertEqual(cmd[:3], ["kaggle", "datasets", "status"])
             self.assertIn("ffatty/plain-text-wikipedia-simpleenglish", cmd)
             self.assertNotIn("list", cmd)
 

@@ -87,7 +87,7 @@ def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> s
         probe = os.environ.get("KAGGLE_AUTH_PROBE_DATASET",
                                f"{owner}/plain-text-wikipedia-simpleenglish")
         result = subprocess.run(
-            [sys.executable, "-m", "kaggle", "datasets", "status", probe,
+            ["kaggle", "datasets", "status", probe,
              "--format", "json"],
             env=clean, capture_output=True, text=True, timeout=90, check=False,
         )
@@ -96,7 +96,8 @@ def verify_and_configure(secret: str, owner: str, home: Path | None = None) -> s
             # establish bad credentials. Surface these separately.
             diagnostics = ((getattr(result, "stderr", "") or "") + "\n" +
                            (getattr(result, "stdout", "") or "")).lower()
-            if "modulenotfounderror" in diagnostics or "importerror" in diagnostics:
+            if ("modulenotfounderror" in diagnostics or "no module named" in diagnostics
+                    or "importerror" in diagnostics):
                 raise RuntimeError(
                     "Kaggle CLI could not import its dependencies (install kaggle and six); "
                     "credentials were not tested"
