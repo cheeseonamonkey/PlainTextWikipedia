@@ -65,6 +65,15 @@ def check_cli(auth: dict[str, str]) -> tuple[int, str]:
         if "404" in diagnostics:
             return result.returncode, "HTTP 404"
         if "traceback" in diagnostics:
+            import re
+            # Show the exception type and redacted final message, never raw credentials.
+            tail = diagnostics.strip().splitlines()[-1]
+            tail = tail.replace(auth.get("KAGGLE_API_TOKEN", "__no_token__"), "[redacted]")
+            tail = tail.replace(auth.get("KAGGLE_KEY", "__no_token__"), "[redacted]")
+            tail = re.sub(r"KGAT_[A-Za-z0-9_-]+", "[redacted]", tail)
+            tail = re.sub(r"https?://\S+", "[url]", tail)
+            tail = re.sub(r"[A-Za-z0-9_./+=-]{22,}", "[value]", tail)
+            print("CI traceback type:", tail[:280], flush=True)
             return result.returncode, "Python traceback"
         if "authentication" in diagnostics:
             return result.returncode, "authentication error"
