@@ -36,9 +36,11 @@ class GlobalBootstrapTests(unittest.TestCase):
         self.assertIn("max-parallel: 2",self.workflow)
         self.assertIn("cancel-in-progress: false",self.workflow)
         self.assertIn("secrets: inherit",self.workflow)
-        self.assertIn("--min-mb 20",self.full_workflow)
-        self.assertIn("kaggle_publish",self.full_workflow)
-        self.assertIn("hf_publish",self.full_workflow)
+        self.assertIn("--max-depth 3", self.full_workflow)
+        self.assertIn("publish-wikipedia.yml", self.full_workflow)
+        publisher = (ROOT / ".github/workflows/publish-wikipedia.yml").read_text()
+        self.assertIn("scripts/publish_wikipedia.py", publisher)
+        self.assertIn('--target "$WIKIPEDIA_SHARD_TARGET"', publisher)
 
 
 if __name__=="__main__":

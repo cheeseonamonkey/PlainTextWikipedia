@@ -6,8 +6,8 @@ index. Each index entry identifies a compressed bzip2 stream boundary, so
 individual CI jobs can fetch disjoint HTTP 206 byte ranges, turn complete
 <page> fragments into standalone XML, and convert them independently.
 
-For small one-file dumps, retain the existing one-job path: repeatedly
-downloading or dividing a tiny wiki into 16 jobs wastes resources.
+When the source cannot be partitioned, convert once and losslessly repack
+the resulting articles to the shared published shard target.
 
 Usage:
   python scripts/multistream_shards.py plan --base-url URL --language hawwiki --max-shards 16
@@ -21,7 +21,6 @@ import argparse
 import bisect
 import bz2
 import json
-import math
 import os
 import re
 import sys
@@ -46,8 +45,6 @@ except ModuleNotFoundError as exc:
         raise
     from current_export import discover as discover_current
 
-MIN_INDEXED_SIZE = 128 * 1024 * 1024
-TARGET_BYTES_PER_JOB = 128 * 1024 * 1024
 PAGE_OPEN = b"<page>"
 PAGE_CLOSE = b"</page>"
 PAGE_CLOSE_SIZE = len(PAGE_CLOSE)
@@ -166,11 +163,10 @@ def plan(base: str, language: str, max_shards: int) -> dict:
     # medium/large one-file dumps. Never download a full archive in every job.
     whole, idx = paths(base,language)
     supported, size = byte_range_available(whole)
-    if supported and size >= MIN_INDEXED_SIZE:
+    if supported:
         try:
             streams = index_streams(idx)
-            count = min(max_shards,len(streams),
-                        max(2,math.ceil(size/TARGET_BYTES_PER_JOB)))
+            count = min(max_shards, len(streams))
             if count>1:
                 boundaries(streams,size,count)
                 return {"mode":"indexed", "count":count,"archive_bytes":size,

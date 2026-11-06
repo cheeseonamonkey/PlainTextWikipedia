@@ -51,8 +51,8 @@ jobs:
           set -euo pipefail
           [[ "$LANGUAGE" =~ ^[a-z][a-z0-9_-]*wiki$ ]] || exit 1
           . config/datasets.env
-          max_shards="$FULL_SHARD_COUNT"
-          [[ "$LANGUAGE" != simplewiki ]] || max_shards="$SIMPLE_SHARD_COUNT"
+          max_shards="$WIKIPEDIA_SHARD_TARGET"
+          [[ "$max_shards" == 8 ]] || { echo "::error::Expected eight output shards"; exit 1; }
           plan="$(python scripts/multistream_shards.py plan \
             --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
             --language "$LANGUAGE" --max-shards "$max_shards")"
@@ -74,7 +74,7 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     runs-on: ubuntu-latest
@@ -132,7 +132,7 @@ jobs:
             output/*.manifest.json
           compression-level: 0
           if-no-files-found: warn
-          retention-days: 1
+          retention-days: 7
       - name: Free runner disk
         if: always()
         run: rm -rf output ranges ranges.txt download-failures.json
@@ -140,242 +140,10 @@ jobs:
   publish:
     needs: [plan, build]
     if: ${{ always() && !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 360
-    env:
-      LANGUAGE: ${{ inputs.language }}
-      COUNT: ${{ needs.plan.outputs.count }}
-      HF_REPO_INPUT: ${{ inputs.hf_repo }}
-      KAGGLE_DATASET_INPUT: ${{ inputs.kaggle_dataset }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Resolve language and publishing destinations
-        shell: bash
-        run: |
-          set -euo pipefail
-          . config/datasets.env
-          code="${LANGUAGE%wiki}"
-          hf_key="FULL_HF_REPO_${code^^}"
-          kaggle_key="FULL_KAGGLE_DATASET_${code^^}"
-          hf_id="$HF_REPO_INPUT"
-          kaggle_id="$KAGGLE_DATASET_INPUT"
-          if [[ -z "$hf_id" ]]; then hf_id="${!hf_key:-}"; fi
-          if [[ -z "$kaggle_id" ]]; then kaggle_id="${!kaggle_key:-}"; fi
-          if [[ "$LANGUAGE" == "simplewiki" ]]; then
-            [[ -n "$hf_id" ]] || hf_id="$SIMPLE_HF_REPO"
-            [[ -n "$kaggle_id" ]] || kaggle_id="$SIMPLE_KAGGLE_DATASET"
-          fi
-          case "$code" in
-            en) name=English ;; es) name=Spanish ;; fr) name=French ;;
-            de) name=German ;; it) name=Italian ;; pt) name=Portuguese ;;
-            ru) name=Russian ;; zh) name=Chinese ;; no) name=Norwegian ;;
-            simple) name="Simple English" ;;
-            *) name="" ;;
-          esac
-          if [[ -z "$name" ]]; then
-            IFS='|' read -r name slug < <(python scripts/language_info.py "$LANGUAGE")
-            if [[ -z "$hf_id" ]]; then hf_id="ffatty/plaintext-wikipedia-full-$slug"; fi
-            if [[ -z "$kaggle_id" ]]; then kaggle_id="ffatty/plaintext-wikipedia-full-$slug"; fi
-          fi
-          echo "FULL_HF_REPO=$hf_id" >> "$GITHUB_ENV"
-          echo "FULL_KAGGLE_DATASET=$kaggle_id" >> "$GITHUB_ENV"
-          echo "LANG_CODE=$code" >> "$GITHUB_ENV"
-          echo "LANG_NAME=$name" >> "$GITHUB_ENV"
-          echo "SOURCE_REPO_URL=$SOURCE_REPO_URL" >> "$GITHUB_ENV"
-          echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL" >> "$GITHUB_ENV"
-          echo "HF=$hf_id Kaggle=$kaggle_id"
-      - name: Collect built shards
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          pattern: full-${{ inputs.language }}-*
-          merge-multiple: true
-          path: publish
-      - name: Losslessly repack completed leaves for publication
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          target=16
-          [[ "$LANGUAGE" != simplewiki ]] || target=1
-          python scripts/repack_shards.py --directory publish --target "$target" --min-mb 20
-      - name: Inspect successful leaves, verify exact recovery coverage
-        if: always()
-        id: inspect
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/inspect_adaptive.py \
-            --language "$LANGUAGE" --count "$COUNT" \
-            --directory publish --github-output "$GITHUB_OUTPUT" \
-            --github-summary "$GITHUB_STEP_SUMMARY"
-      - name: Publish to Hugging Face
-        id: hf_publish
-        continue-on-error: true
-        if: ${{ steps.inspect.outputs.available == 'true' && env.HF_TOKEN != '' && env.FULL_HF_REPO != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install huggingface_hub
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from huggingface_hub import HfApi
-          import json
-          e = os.environ
-          api = HfApi(token=e["HF_TOKEN"])
-          repo = e["FULL_HF_REPO"]
-          api.create_repo(repo_id=repo, repo_type="dataset", exist_ok=True)
-          card = Path("config/hf-dataset-card.md").read_text()
-          replacements = {
-              "__LANG_PROJECT__": e["LANGUAGE"],
-              "__LANG_CODE__": e["LANG_CODE"],
-              "__LANG_NAME__": e["LANG_NAME"],
-              "__HF_REPO__": repo,
-              "__SOURCE_URL__": f'https://dumps.wikimedia.org/{e["LANGUAGE"]}/latest',
-              "__REPO_URL__": e["SOURCE_REPO_URL"],
-              "__UPSTREAM_URL__": e["UPSTREAM_REPO_URL"],
-          }
-          for token, value in replacements.items():
-              card = card.replace(token, value)
-          manifest = json.loads(Path("publish/build-manifest.json").read_text())
-          n = manifest["published_shards"]
-          expected = manifest["expected_shards"]
-          missing = manifest["missing_shards"]
-          incomplete = manifest["incomplete_shards"]
-          archives = manifest["published_archives"]
-          status = ("COMPLETE" if manifest["complete"] else "PARTIAL")
-          warning = (
-              f"**Build status: {status} — {n}/{expected} root shards recovered "
-              f"({archives} leaf archives).** "
-              + (f"Missing roots: {missing}; incompletely recovered roots: {incomplete}. "
-                 "See data/build-manifest.json for failed subranges and coverage."
-                 if not manifest["complete"] else "All planned page ranges recovered.")
-              + "\n\n")
-          card = card.replace("## Format", warning + "## Format", 1)
-          Path("publish/README.md").write_text(card, encoding="utf-8")
-          # Upload small independent commits instead of one multi-GB commit.
-          # This also allows a transient 429/500/504 to retry one leaf only.
-          import time
-          def retry_upload(description, action):
-              for attempt in range(5):
-                  try:
-                      return action()
-                  except Exception as exc:
-                      if attempt == 4:
-                          raise
-                      delay = min(120, 10 * 2 ** attempt)
-                      print(f"Retrying {description} in {delay}s: {exc}", flush=True)
-                      time.sleep(delay)
-          current = sorted(Path("publish").glob("*.txt.gz"))
-          wanted = {f"data/{file.name}" for file in current}
-          existing = set(api.list_repo_files(repo, repo_type="dataset"))
-          for file in current:
-              retry_upload(file.name, lambda file=file: api.upload_file(
-                  repo_id=repo, repo_type="dataset",
-                  path_or_fileobj=str(file), path_in_repo=f"data/{file.name}",
-                  commit_message=f'Update {e["LANG_NAME"]} leaf {file.name}'))
-          retry_upload("build-manifest.json", lambda: api.upload_file(
-              repo_id=repo, repo_type="dataset",
-              path_or_fileobj="publish/build-manifest.json",
-              path_in_repo="data/build-manifest.json",
-              commit_message=f'Publish coverage for {e["LANG_NAME"]} ({n}/{expected})'))
-          retry_upload("README.md", lambda: api.upload_file(
-              repo_id=repo, repo_type="dataset",
-              path_or_fileobj="publish/README.md", path_in_repo="README.md",
-              commit_message=f'Update {e["LANG_NAME"]} dataset card'))
-          for obsolete in sorted(existing - wanted):
-              if obsolete.startswith("data/") and obsolete.endswith(".txt.gz"):
-                  retry_upload(f"delete {obsolete}", lambda obsolete=obsolete: api.delete_file(
-                      repo_id=repo, repo_type="dataset", path_in_repo=obsolete,
-                      commit_message=f"Remove obsolete {obsolete}"))
-          print(f"Uploaded {len(current)} leaves; removed obsolete compressed archives")
-          print(f"https://huggingface.co/datasets/{repo}")
-          PY
-      - name: Publish to Kaggle
-        id: kaggle_publish
-        continue-on-error: true
-        if: ${{ always() && steps.inspect.outputs.available == 'true' && env.KAGGLE_TOKEN != '' && env.FULL_KAGGLE_DATASET != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install kaggle
-          python scripts/kaggle_auth.py --owner "${FULL_KAGGLE_DATASET%%/*}"
-          python - <<'PY'
-          import json, os
-          from pathlib import Path
-          e = os.environ
-          template = "kaggle-metadata.json" if e["LANGUAGE"] == "simplewiki" else "kaggle-metadata-full.json"
-          meta = json.loads(Path(template).read_text())
-          meta["id"] = e["FULL_KAGGLE_DATASET"]
-          meta["title"] = f'Plaintext Wikipedia ({e["LANG_NAME"]})'
-          if e["LANGUAGE"] != "simplewiki":
-              meta["description"] = meta["description"].replace("English", e["LANG_NAME"])
-          meta["description"] = meta["description"].replace("__REPO_URL__", e["SOURCE_REPO_URL"])
-          meta["description"] = meta["description"].replace("__UPSTREAM_URL__", e["UPSTREAM_REPO_URL"])
-          manifest = json.loads(Path("publish/build-manifest.json").read_text())
-          n, expected = manifest["published_shards"], manifest["expected_shards"]
-          meta["description"] += (
-              f"\n\nBuild status: {'complete' if manifest['complete'] else 'PARTIAL'} "
-              f"({n}/{expected} root shards; {manifest['published_archives']} leaf files). "
-              f"Missing roots: {manifest['missing_shards']}; "
-              f"incomplete roots: {manifest['incomplete_shards']}. "
-              "See build-manifest.json for exact coverage."
-          )
-          Path("publish/dataset-metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
-          PY
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          from scripts.kaggle_backfill import run_kaggle
-          run_kaggle(os.environ["FULL_KAGGLE_DATASET"], Path("publish"),
-                     os.environ["LANG_NAME"])
-          PY
-      - name: Report publishing errors
-        if: ${{ always() && steps.inspect.outputs.available == 'true' }}
-        shell: bash
-        env:
-          HF_RESULT: ${{ steps.hf_publish.outcome }}
-          KAGGLE_RESULT: ${{ steps.kaggle_publish.outcome }}
-        run: |
-          echo "HF publication: $HF_RESULT; Kaggle publication: $KAGGLE_RESULT"
-          if [[ "$HF_RESULT" == success || "$KAGGLE_RESULT" == success ]]; then
-            if [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
-              echo "::warning::A publisher failed; the other destination published successfully"
-            fi
-          elif [[ "$HF_RESULT" == failure || "$KAGGLE_RESULT" == failure ]]; then
-            echo "::error::Both publishing destinations failed or were skipped"
-            exit 1
-          else
-            echo "::warning::Both publishing destinations were skipped"
-          fi
-      - name: Report missing or invalid build artifacts
-        if: ${{ always() && steps.inspect.outputs.available != 'true' }}
-        shell: bash
-        run: |
-          echo "::error::No valid Wikipedia shard archives were collected; no publication was possible"
-          exit 1
-      - name: Delete run shard artifacts after confirmed publication
-        if: ${{ always() && (steps.hf_publish.outcome == 'success' || steps.kaggle_publish.outcome == 'success') }}
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # Only delete this exact run's matching shard artifacts after one publisher succeeds.
-          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[] | [.id, .name] | @tsv' \
-            | while read -r id name; do
-                if [[ "$name" =~ ^full-${LANGUAGE}-[0-9]+$ ]]; then
-                  gh api --method DELETE "/repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
-                  echo "Deleted published artifact $name ($id)"
-                fi
-              done
-      - name: Missing publisher warning
-        if: ${{ env.HF_TOKEN == '' || env.KAGGLE_TOKEN == '' }}
-        shell: bash
-        run: |
-          [[ -n "$HF_TOKEN" ]] || echo "::warning::HF_TOKEN absent: HF publication skipped"
-          [[ -n "$KAGGLE_TOKEN" ]] || echo "::warning::KAGGLE_TOKEN absent: Kaggle publication skipped"
+    uses: ./.github/workflows/publish-wikipedia.yml
+    with:
+      language: ${{ inputs.language }}
+      count: ${{ needs.plan.outputs.count }}
+      hf_repo: ${{ inputs.hf_repo }}
+      kaggle_dataset: ${{ inputs.kaggle_dataset }}
+    secrets: inherit

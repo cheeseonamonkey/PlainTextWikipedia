@@ -1,0 +1,153 @@
+name: Publish validated Wikipedia edition
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        type: string
+        required: true
+      count:
+        type: string
+        required: false
+      source_run_id:
+        type: string
+        required: false
+      hf_repo:
+        type: string
+        required: false
+      kaggle_dataset:
+        type: string
+        required: false
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Existing rebuild run ID whose shard artifacts are still retained
+        type: string
+        required: true
+      language:
+        description: Wikimedia project, e.g. simplewiki or enwiki
+        type: string
+        required: true
+      hf_repo:
+        description: Optional existing HF dataset override
+        type: string
+      kaggle_dataset:
+        description: Optional existing Kaggle dataset override
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  publish:
+    concurrency:
+      group: wikipedia-publish-${{ inputs.language }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      LANGUAGE: ${{ inputs.language }}
+      COUNT_HINT: ${{ inputs.count }}
+      HF_REPO_INPUT: ${{ inputs.hf_repo }}
+      KAGGLE_DATASET_INPUT: ${{ inputs.kaggle_dataset }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve language and publishing destinations
+        shell: bash
+        run: |
+          set -euo pipefail
+          . config/datasets.env
+          code="${LANGUAGE%wiki}"
+          hf_key="FULL_HF_REPO_${code^^}"
+          kaggle_key="FULL_KAGGLE_DATASET_${code^^}"
+          hf_id="$HF_REPO_INPUT"
+          kaggle_id="$KAGGLE_DATASET_INPUT"
+          if [[ -z "$hf_id" ]]; then hf_id="${!hf_key:-}"; fi
+          if [[ -z "$kaggle_id" ]]; then kaggle_id="${!kaggle_key:-}"; fi
+          if [[ "$LANGUAGE" == "simplewiki" ]]; then
+            [[ -n "$hf_id" ]] || hf_id="$SIMPLE_HF_REPO"
+            [[ -n "$kaggle_id" ]] || kaggle_id="$SIMPLE_KAGGLE_DATASET"
+          fi
+          case "$code" in
+            en) name=English ;; es) name=Spanish ;; fr) name=French ;;
+            de) name=German ;; it) name=Italian ;; pt) name=Portuguese ;;
+            ru) name=Russian ;; zh) name=Chinese ;; no) name=Norwegian ;;
+            simple) name="Simple English" ;;
+            *) name="" ;;
+          esac
+          if [[ -z "$name" ]]; then
+            IFS='|' read -r name slug < <(python scripts/language_info.py "$LANGUAGE")
+            if [[ -z "$hf_id" ]]; then hf_id="ffatty/plaintext-wikipedia-full-$slug"; fi
+            if [[ -z "$kaggle_id" ]]; then kaggle_id="ffatty/plaintext-wikipedia-full-$slug"; fi
+          fi
+          {
+            echo "FULL_HF_REPO=$hf_id"
+            echo "FULL_KAGGLE_DATASET=$kaggle_id"
+            echo "LANG_CODE=$code"
+            echo "LANG_NAME=$name"
+            echo "SOURCE_REPO_URL=$SOURCE_REPO_URL"
+            echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL"
+          } >> "$GITHUB_ENV"
+          echo "HF=$hf_id Kaggle=$kaggle_id"
+      - name: Collect existing shard artifacts (without rebuilding XML)
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.source_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          pattern: full-${{ inputs.language }}-*
+          merge-multiple: true
+          path: publish
+      - name: Validate source run and discover expected root count
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          reports = [json.loads(p.read_text()) for p in Path("publish").glob("*.manifest.json")]
+          if not reports:
+              raise RuntimeError("No retained shard manifests; source run cannot be resumed")
+          language = os.environ["LANGUAGE"]
+          counts = {r["planned_shards"] for r in reports if r.get("language") == language}
+          if any(r.get("language") != language for r in reports) or len(counts) != 1:
+              raise RuntimeError("Inconsistent source run shard metadata")
+          count = counts.pop()
+          roots = [r.get("root_shard") for r in reports]
+          if not 1 <= count <= 64 or any(not isinstance(root, int) or root < 1 or root > count for root in roots) or len(set(roots)) != len(roots):
+              raise RuntimeError("Invalid or duplicated source root shards")
+          if os.getenv("COUNT_HINT") and int(os.environ["COUNT_HINT"]) != count:
+              raise RuntimeError("Requested shard count differs from retained source run")
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              print(f"COUNT={count}", file=output)
+          print(f"Retrieved {len(reports)}/{count} root build reports")
+          PYCODE
+      - name: Losslessly repack to shared eight-archive target
+        shell: bash
+        run: |
+          set -euo pipefail
+          . config/datasets.env
+          python scripts/repack_shards.py --directory publish --target "$WIKIPEDIA_SHARD_TARGET" --min-mb 0
+      - name: Inspect exact successful source coverage
+        id: inspect
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/inspect_adaptive.py \
+            --language "$LANGUAGE" --count "$COUNT" \
+            --directory publish --github-output "$GITHUB_OUTPUT" \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+      - name: Publish Hugging Face and Kaggle concurrently
+        if: ${{ steps.inspect.outputs.available == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check huggingface_hub kaggle six
+          python scripts/publish_wikipedia.py --directory publish
+      - name: Report empty or corrupt source staging
+        if: ${{ steps.inspect.outputs.available != 'true' }}
+        run: |
+          echo "::error::No valid source shard artifacts were available to publish"
+          exit 1

@@ -31,19 +31,44 @@ class LanguagePipelineTests(unittest.TestCase):
                 self.assertEqual(job["with"]["language"], language)
                 self.assertEqual(job["secrets"], "inherit")
         all_languages = workflow("rebuild-languages.yml")
-        for name, job in all_languages["jobs"].items():
-            with self.subTest(language=name):
-                self.assertEqual(job["uses"], "./.github/workflows/rebuild-full.yml")
-                self.assertEqual(job["with"]["language"], f"{name}wiki" if name != "simple" else "simplewiki")
+        self.assertEqual(all_languages["jobs"]["rebuild"]["uses"],
+                         "./.github/workflows/rebuild-full.yml")
+        self.assertEqual(all_languages["jobs"]["rebuild"]["with"]["language"],
+                         "${{ matrix.language }}")
+        self.assertEqual(all_languages["jobs"]["rebuild"]["strategy"]["fail-fast"], "false")
+        from scripts.plan_wikipedia_languages import languages
+        self.assertEqual(languages("simplewiki,enwiki"), ["simplewiki", "enwiki"])
+        self.assertEqual(languages("simple,en"), ["simplewiki", "enwiki"])
+        self.assertGreaterEqual(len(languages()), 210)
+        self.assertEqual(len(languages()), len(set(languages())))
 
-    def test_simple_edition_uses_legacy_single_source_shard(self):
-        script = next(step["run"] for step in workflow("rebuild-full.yml")["jobs"]["plan"]["steps"]
+    def test_uniform_sharding_and_recursive_recovery(self):
+        data = workflow("rebuild-full.yml")["jobs"]
+        script = next(step["run"] for step in data["plan"]["steps"]
                       if step.get("id") == "plan")
-        self.assertIn('max_shards="$SIMPLE_SHARD_COUNT"', script)
-        self.assertIn('--max-shards "$max_shards"', script)
+        self.assertIn('max_shards="$WIKIPEDIA_SHARD_TARGET"', script)
+        self.assertNotIn("simplewiki", script)
+        self.assertEqual(data["build"]["strategy"]["max-parallel"], "8")
+        self.assertIn("--max-depth 3", str(data["build"]))
+        self.assertEqual(data["publish"]["uses"], "./.github/workflows/publish-wikipedia.yml")
+        self.assertEqual(data["publish"]["secrets"], "inherit")
+        publisher = workflow("publish-wikipedia.yml")
+        self.assertIn("workflow_dispatch", publisher["on"])
+        self.assertIn("workflow_call", publisher["on"])
+        script = str(publisher["jobs"]["publish"]["steps"])
+        self.assertIn('--target "$WIKIPEDIA_SHARD_TARGET"', script)
+        self.assertIn('inputs.source_run_id || github.run_id', script)
+        self.assertIn("scripts/publish_wikipedia.py", script)
+        self.assertNotIn('!= simplewiki', script)
+
+    def test_unlisted_wikipedia_uses_generic_metadata_in_same_pipeline(self):
+        from scripts.language_info import metadata
+        self.assertEqual(metadata("zz_customwiki"), ("zz_custom", "zz-custom"))
+        with self.assertRaises(ValueError):
+            metadata("../badwiki")
 
     def test_destination_resolution_reuses_existing_datasets(self):
-        data = workflow("rebuild-full.yml")
+        data = workflow("publish-wikipedia.yml")
         publish = data["jobs"]["publish"]
         script = next(step["run"] for step in publish["steps"]
                       if step.get("name") == "Resolve language and publishing destinations")

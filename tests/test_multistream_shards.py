@@ -36,7 +36,7 @@ class IndexedDumpTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             boundaries([(100,1)],100,1)
 
-    def test_large_single_file_is_indexed_but_small_dump_stays_single(self):
+    def test_indexed_source_uses_same_shard_budget_at_any_size(self):
         catalog=[(1,2147483647,"hawwiki-latest-pages-articles.xml.bz2",
                   "01-Oct-2026",2_000_000_000)]
         offsets=[(i*128*1024*1024,i*100+1) for i in range(20)]
@@ -49,10 +49,12 @@ class IndexedDumpTests(unittest.TestCase):
         self.assertEqual(p["count"],16)
         with (patch("scripts.multistream_shards.page_range_catalog",return_value=catalog),
               patch("scripts.multistream_shards.byte_range_available",
-                    return_value=(True,2*1024*1024))):
-            p=plan("https://dumps.wikimedia.org/hawwiki/latest","hawwiki",16)
-        self.assertEqual(p["mode"],"normal")
-        self.assertEqual(p["count"],1)
+                    return_value=(True,2*1024*1024)),
+              patch("scripts.multistream_shards.index_streams",
+                    return_value=[(i*100_000, i*100+1) for i in range(20)])):
+            p=plan("https://dumps.wikimedia.org/hawwiki/latest","hawwiki",8)
+        self.assertEqual(p["mode"],"indexed")
+        self.assertEqual(p["count"],8)
 
     def test_numbered_sources_keep_original_partition(self):
         catalog=[(1,100,"hewiki-latest-pages-articles1.xml-p1p100.bz2",

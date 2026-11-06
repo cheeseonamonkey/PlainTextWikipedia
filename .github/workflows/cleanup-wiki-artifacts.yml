@@ -1,20 +1,12 @@
 name: Reclaim completed Wikipedia build artifacts
 
+# Retain build artifacts for up to seven days so publisher-only retries
+# can reuse validated conversions. Destructive cleanup requires a manual run.
 on:
-  workflow_run:
-    workflows:
-      - Rebuild Wikipedia shards
-      - Build all Wikipedia languages
-      - Bootstrap 58 more active Wikipedia language editions
-      - Bootstrap 73 language-diversity Wikipedias
-      - Build 42 additional Wikipedia languages
-      - Retry missing Wikipedia shards
-      - Rebuild complete Simple English dataset
-    types: [completed]
   workflow_dispatch:
     inputs:
       run_id:
-        description: Completed workflow run ID to clean (only known Wikipedia shard artifacts)
+        description: Completed build run ID to clean explicitly
         required: true
         type: string
 

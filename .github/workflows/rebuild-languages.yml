@@ -1,95 +1,41 @@
 name: Build all Wikipedia languages
-run-name: Rebuild 10 Wikipedia editions
+run-name: Wikimedia corpus rebuild (${{ inputs.languages || 'all configured editions' }})
 
-# Full multi-edition rebuilds are intentionally manual to avoid accidental
-# multi-GB work on workflow/config changes.
+# Intentionally manual: the full inventory includes over 200 editions.
 on:
   workflow_dispatch:
+    inputs:
+      languages:
+        description: Comma-separated Wikipedia projects, blank for all cataloged editions
+        required: false
+        type: string
 
 permissions:
   contents: read
   actions: write
 
 concurrency:
-  group: rebuild-all-wikipedia
+  group: wikipedia-language-matrix
   cancel-in-progress: false
 
 jobs:
-  simple:
-    name: Simple English
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.languages.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: languages
+        env:
+          LANGUAGES: ${{ inputs.languages }}
+        run: python scripts/plan_wikipedia_languages.py --languages "$LANGUAGES"
+  rebuild:
+    needs: plan
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     uses: ./.github/workflows/rebuild-full.yml
     with:
-      language: simplewiki
-    secrets: inherit
-  no:
-    needs: simple
-    if: ${{ always() && !cancelled() }}
-    name: nowiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: nowiki
-    secrets: inherit
-  es:
-    needs: no
-    if: ${{ always() && !cancelled() }}
-    name: eswiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: eswiki
-    secrets: inherit
-  fr:
-    needs: es
-    if: ${{ always() && !cancelled() }}
-    name: frwiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: frwiki
-    secrets: inherit
-  de:
-    needs: fr
-    if: ${{ always() && !cancelled() }}
-    name: dewiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: dewiki
-    secrets: inherit
-  it:
-    needs: de
-    if: ${{ always() && !cancelled() }}
-    name: itwiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: itwiki
-    secrets: inherit
-  pt:
-    needs: it
-    if: ${{ always() && !cancelled() }}
-    name: ptwiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: ptwiki
-    secrets: inherit
-  ru:
-    needs: pt
-    if: ${{ always() && !cancelled() }}
-    name: ruwiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: ruwiki
-    secrets: inherit
-  zh:
-    needs: ru
-    if: ${{ always() && !cancelled() }}
-    name: zhwiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: zhwiki
-    secrets: inherit
-  en:
-    needs: zh
-    if: ${{ always() && !cancelled() }}
-    name: enwiki
-    uses: ./.github/workflows/rebuild-full.yml
-    with:
-      language: enwiki
+      language: ${{ matrix.language }}
     secrets: inherit

@@ -10,12 +10,23 @@ Every Wikimedia edition uses `.github/workflows/rebuild-full.yml` for source
 selection, download, adaptive conversion, coverage validation, and publishing.
 The `language` project code (for example `simplewiki`, `enwiki`, or
 `frwiki`) determines source URLs and existing dataset destinations. Size and
-source layout determine processing concurrency. Simple English retains its
-legacy single gzip archive and dataset IDs; larger editions may publish up to
-16 archives. `rebuild-simple.yml`, `refresh-simple.yml`, and
-`refresh-full-monthly.yml` are entrypoint/schedule wrappers, not independent
-pipelines. A monthly full English refresh now rebuilds the complete edition,
-not a rotating single shard.
+source layout determine whether eight independent source ranges are available;
+all editions target **eight output shards**. When a dump cannot be partitioned
+into eight independent sources, the converter runs once and losslessly repacks
+the result into eight archives. Failed roots recurse into `a/b` subranges up to
+three levels while preserving exact coverage manifests. `rebuild-simple.yml`,
+`refresh-simple.yml`, and `refresh-full-monthly.yml` are only entrypoint/schedule
+wrappers. The monthly English refresh rebuilds the entire edition.
+
+Publishing is shared through `publish-wikipedia.yml` and runs HF and Kaggle
+concurrently using one staged artifact set; each publisher records an independent
+result. The publisher can be dispatched with `source_run_id` and `language` to
+retry publication from retained source artifacts **without repeating conversion**.
+Shard artifacts are retained seven days, with cleanup manual-only. A permanent
+HF metadata/authentication error is never retried; identical existing LFS blobs
+are skipped. A Kaggle version is deferred rather than discarding existing Parquet.
+Kaggle requires valid credentials. Zenodo continues in the separate structured
+Parquet workflow, not the original plaintext-publishing stage.
 
 The corpus feature release is separate: after source publication, run
 `article-features-fleet.yml` to regenerate the 200D embeddings. Feature
