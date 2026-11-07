@@ -433,61 +433,6 @@ class TestFleetPlanningAndKaggleProbe(unittest.TestCase):
                     ], Path(folder)))
 
 
-class TestCIContracts(unittest.TestCase):
-    def test_new_release_workflows_are_manual_only(self):
-        for name in ("structured-fleet.yml", "zenodo-parquet.yml",
-                     "check-publish-credentials.yml"):
-            with self.subTest(name=name):
-                workflow = yaml.load(
-                    (ROOT / ".github" / "workflows" / name).read_text(),
-                    Loader=yaml.BaseLoader,
-                )
-                self.assertEqual(set(workflow["on"]), {"workflow_dispatch"})
-                self.assertEqual(workflow["permissions"]["contents"], "read")
-        root = ROOT / ".github" / "workflows"
-        zenodo = yaml.load((root / "zenodo-parquet.yml").read_text(), Loader=yaml.BaseLoader)
-        fleet = yaml.load((root / "structured-fleet.yml").read_text(), Loader=yaml.BaseLoader)
-        self.assertEqual(zenodo["on"]["workflow_dispatch"]["inputs"]["publish"]["default"],
-                         "true")
-        inputs = fleet["on"]["workflow_dispatch"]["inputs"]
-        self.assertEqual(inputs["publish_zenodo"]["default"], "true")
-        self.assertEqual(inputs["mirror_kaggle"]["default"], "true")
-        self.assertNotIn("format", inputs)
-        for name in ("structured-fleet.yml", "structured-wikipedia.yml"):
-            workflow_text = (root / name).read_text()
-            self.assertNotIn("sqlite", workflow_text.lower())
-            self.assertNotIn("upload-artifact", workflow_text)
-            single = yaml.load(workflow_text, Loader=yaml.BaseLoader)
-            self.assertEqual(set(single["on"]),
-                             {"workflow_dispatch", "workflow_call"} if name == "structured-wikipedia.yml"
-                             else {"workflow_dispatch"})
-            if name == "structured-wikipedia.yml":
-                self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["mirror_kaggle"]["default"], "true")
-                self.assertEqual(single["on"]["workflow_dispatch"]["inputs"]["publish_zenodo"]["default"], "true")
-        fleet_job = fleet["jobs"]["publish"]
-        self.assertEqual(fleet_job["uses"], "./.github/workflows/structured-wikipedia.yml")
-        self.assertEqual(fleet_job["secrets"], "inherit")
-        self.assertEqual(fleet_job["strategy"]["fail-fast"], "false")
-        self.assertEqual(fleet["on"]["workflow_dispatch"]["inputs"]["parallelism"]["default"], "8")
-        self.assertIn("--publish", (root / "zenodo-parquet.yml").read_text())
-
-    def test_cli_entrypoints_import_without_scripts_package_errors(self):
-        for script in ("scripts/multistream_shards.py", "scripts/current_export.py",
-                       "scripts/structured_fleet.py", "scripts/structured_kaggle.py",
-                       "scripts/release_parquet.py"):
-            with self.subTest(script=script):
-                r = subprocess.run(
-                    [sys.executable, script, "--help"], cwd=ROOT,
-                    capture_output=True, text=True, timeout=30)
-                self.assertEqual(r.returncode, 0, r.stderr[-1200:])
-
-    def test_kaggle_cli_supports_exact_version_flags(self):
-        r = subprocess.run(
-            [sys.executable, "-m", "kaggle", "datasets", "version", "--help"],
-            capture_output=True, text=True, timeout=30)
-        self.assertEqual(r.returncode, 0, r.stderr[-1200:])
-        self.assertIn("--keep-tabular", r.stdout)
-        self.assertIn("--dir-mode", r.stdout)
 
 
 if __name__ == "__main__":

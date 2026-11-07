@@ -3,6 +3,10 @@ name: Rebuild Wikipedia shards
 on:
   workflow_dispatch:
     inputs:
+      publish:
+        description: Publish complete bundle to all three targets
+        type: boolean
+        default: false
       language:
         description: Wikimedia project code (e.g. eswiki or zhwiki)
         required: true
@@ -18,6 +22,9 @@ on:
         type: string
   workflow_call:
     inputs:
+      publish:
+        type: boolean
+        default: false
       language:
         required: true
         type: string
@@ -140,9 +147,10 @@ jobs:
 
   publish:
     needs: [plan, build]
-    if: ${{ always() && !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ needs.plan.result == 'success' && needs.build.result == 'success' }}
     uses: ./.github/workflows/publish-wikipedia.yml
     with:
+      publish: ${{ inputs.publish }}
       language: ${{ inputs.language }}
       count: ${{ needs.plan.outputs.count }}
       hf_repo: ${{ inputs.hf_repo }}

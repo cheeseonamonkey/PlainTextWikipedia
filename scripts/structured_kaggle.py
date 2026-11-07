@@ -311,4 +311,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit("Retired publishing entrypoint. Use python -m scripts.wikipedia_bundle; build-only is the default.")

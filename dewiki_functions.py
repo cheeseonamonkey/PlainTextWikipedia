@@ -100,12 +100,8 @@ def iter_articles(path: Path, min_page_id: int | None = None, max_page_id: int |
                         signal.setitimer(signal.ITIMER_REAL, 15.0)
                     try:
                         text = clean_wikitext(source)
-                    except _ArticleConversionTimeout:
-                        print(
-                            f"WARNING: slow article skipped after 15s: {title!r} ({page_id_text})",
-                            file=sys.stderr, flush=True,
-                        )
-                        continue
+                    except _ArticleConversionTimeout as exc:
+                        raise RuntimeError(f"Article conversion timed out: {title!r} ({page_id_text}); refusing partial output") from exc
                     finally:
                         if has_timer:
                             signal.setitimer(signal.ITIMER_REAL, 0)

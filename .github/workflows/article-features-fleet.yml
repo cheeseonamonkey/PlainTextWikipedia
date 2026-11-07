@@ -1,46 +1,27 @@
-name: Publish per-language Wikipedia lexical and semantic features
-
+name: Wikipedia bundle fleet
 on:
   workflow_dispatch:
     inputs:
       languages:
-        description: Wikimedia codes (simple,en,sh); blank = all existing datasets
+        description: Wikimedia codes; blank selects all existing editions
         type: string
-        required: false
-        default: "simple"
-      mirror_kaggle:
-        description: Update existing Kaggle datasets with complete feature Parquet
-        type: boolean
-        default: true
+        default: ''
       parallelism:
-        description: Concurrent language builders (1-8)
+        description: Concurrent language builders
         type: number
         default: 2
       publish:
-        description: Commit derived feature files into existing Hugging Face datasets
-        type: boolean
-        default: true
-      fts5:
-        description: Build SQLite FTS5 full-text search index
-        type: boolean
-        default: true
-      allow_lexical_only:
-        description: Diagnostic only; fastText failure is fatal by default
+        description: Publish identical bundles to ALL three targets
         type: boolean
         default: false
-
 permissions:
   contents: read
-
-concurrency:
-  group: wiki-corpus-features
-  cancel-in-progress: false
-
+  actions: read
 jobs:
   plan:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.discover.outputs.matrix }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       LANGUAGES: ${{ inputs.languages }}
@@ -49,21 +30,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - run: python -m pip install --disable-pip-version-check huggingface_hub
-      - id: discover
-        shell: bash
+          python-version: '3.12'
+      - run: python -m pip install huggingface_hub
+      - id: plan
         run: |
-          set -euo pipefail
-          if ! [[ "$PARALLELISM" =~ ^[0-9]+$ ]] || (( PARALLELISM < 1 || PARALLELISM > 8 )); then
-            echo "::error::parallelism must be 1-8"
-            exit 1
-          fi
+          [[ "$PARALLELISM" =~ ^[1-8]$ ]] || exit 1
           python scripts/structured_fleet.py plan --only "$LANGUAGES"
-
   build:
     needs: plan
-    if: ${{ needs.plan.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: ${{ inputs.parallelism }}
@@ -72,7 +46,4 @@ jobs:
     with:
       repo_id: ${{ matrix.repo }}
       publish: ${{ inputs.publish }}
-      mirror_kaggle: ${{ inputs.mirror_kaggle }}
-      fts5: ${{ inputs.fts5 }}
-      allow_lexical_only: ${{ inputs.allow_lexical_only }}
     secrets: inherit

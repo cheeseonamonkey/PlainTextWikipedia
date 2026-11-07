@@ -5,6 +5,10 @@ run-name: Wikimedia corpus rebuild (${{ inputs.languages || 'all configured edit
 on:
   workflow_dispatch:
     inputs:
+      publish:
+        description: Publish complete bundles to all three targets
+        type: boolean
+        default: false
       languages:
         description: Comma-separated Wikipedia projects, blank for all cataloged editions
         required: false
@@ -38,4 +42,5 @@ jobs:
     uses: ./.github/workflows/rebuild-full.yml
     with:
       language: ${{ matrix.language }}
+      publish: ${{ inputs.publish }}
     secrets: inherit

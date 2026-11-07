@@ -15,32 +15,38 @@ ROOT = Path(__file__).resolve().parents[1]
 SIMPLE = "ffatty/plain-text-wikipedia-simpleenglish"
 
 
-@lru_cache(maxsize=256)
-def wiki_code(repo: str) -> str:
-    """Return Wikimedia's wiki code, refusing unknown repo-to-project mappings."""
-    if repo == SIMPLE:
-        return "simple"
-    if not re.fullmatch(r"ffatty/plaintext-wikipedia-full-[a-z0-9-]+", repo):
-        raise ValueError(f"Unsupported Wikipedia dataset: {repo}")
-
-    for item in json.loads((ROOT / "config/additional-languages.json")
-                           .read_text(encoding="utf-8"))["languages"]:
-        if repo == f"ffatty/plaintext-wikipedia-full-{item['slug']}":
-            project = item["project"]
-            if not re.fullmatch(r"[a-z0-9_-]+wiki", project):
-                raise ValueError(f"Invalid Wikimedia project: {project}")
-            return project.removesuffix("wiki")
-
-    # Original major-edition datasets predate the expanded catalog.
-    candidates = []
+@lru_cache(maxsize=1)
+def repository_codes():
+    mapping = {SIMPLE: "simple"}
+    catalog = json.loads((ROOT / "config/additional-languages.json").read_text(encoding="utf-8"))
+    for item in catalog["languages"]:
+        if not re.fullmatch(r"[a-z0-9_-]+wiki", item["project"]):
+            raise ValueError(f"Invalid Wikimedia project: {item['project']}")
+        mapping[f"ffatty/plaintext-wikipedia-full-{item['slug']}"] = item["project"].removesuffix("wiki")
+    aliases = {}
     for line in (ROOT / "config/datasets.env").read_text(encoding="utf-8").splitlines():
         matched = re.fullmatch(r"FULL_HF_REPO_([A-Z_]+)=(ffatty/[^\s#]+)", line.strip())
-        if matched and matched.group(2) == repo:
-            candidates.append(matched.group(1).lower())
-    if candidates:
-        # Norwegian has both NO and NOB compatibility aliases in datasets.env.
-        return min(candidates, key=lambda code: (len(code), code))
-    raise ValueError(f"No Wikimedia project mapping for {repo}")
+        if matched:
+            aliases.setdefault(matched[2], []).append(matched[1].lower())
+    for repo, codes in aliases.items():
+        mapping.setdefault(repo, min(codes, key=lambda code: (len(code), code)))
+    return mapping
+
+
+def wiki_code(repo: str) -> str:
+    try:
+        return repository_codes()[repo]
+    except KeyError:
+        raise ValueError(f"No Wikimedia project mapping for {repo}") from None
+
+
+def project_repo(project: str) -> str:
+    if not re.fullmatch(r"[a-z0-9_-]+wiki", project):
+        raise ValueError(f"Invalid Wikimedia project: {project}")
+    matches = [repo for repo, code in repository_codes().items() if code == project.removesuffix("wiki")]
+    if len(matches) != 1:
+        raise ValueError(f"No unique existing dataset for {project}")
+    return matches[0]
 
 
 def article_url(title: str, code: str) -> str:
