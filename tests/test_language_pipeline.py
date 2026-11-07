@@ -38,7 +38,7 @@ class LanguagePipelineTests(unittest.TestCase):
         for file in ROOT.glob('*.yml'):
             events = workflow(file.name).get('on', {})
             for trigger in ('workflow_dispatch', 'workflow_call'):
-                settings = events.get(trigger, {}).get('inputs', {}).get('publish')
+                settings = (events.get(trigger) or {}).get('inputs', {}).get('publish')
                 if settings is not None:
                     self.assertEqual(settings.get('default'), 'false', (file.name, trigger))
 
