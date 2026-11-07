@@ -89,6 +89,20 @@ jobs:
       - name: Check all publisher credentials before building
         if: inputs.publish
         run: python -m scripts.publish_preflight
+      - name: Sanity-check bundle imports and real CPU Bekko inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m scripts.wikipedia_bundle --help >/dev/null
+          python - <<'PY'
+          import numpy as np
+          from scripts.bekko_features import BekkoEncoder, MODEL_DIMS
+          vectors, lengths = BekkoEncoder().encode(["Wikipedia is a multilingual encyclopedia."])
+          if vectors.shape != (1, MODEL_DIMS) or len(lengths) != 1 or not np.isfinite(vectors).all():
+              raise RuntimeError("Bekko encoder smoke test failed")
+          print("Bekko CPU smoke test passed")
+          PY
+          df -h .
       - name: Collect complete converted source artifacts
         if: inputs.source_run_id != ''
         uses: actions/download-artifact@v4
