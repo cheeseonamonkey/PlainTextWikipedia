@@ -99,12 +99,29 @@ jobs:
           set -euo pipefail
           python -m scripts.wikipedia_bundle --help >/dev/null
           python - <<'PY'
-          import numpy as np
-          from scripts.bekko_features import BekkoEncoder, MODEL_DIMS
-          vectors, lengths = BekkoEncoder().encode(["Wikipedia is a multilingual encyclopedia."])
-          if vectors.shape != (1, MODEL_DIMS) or len(lengths) != 1 or not np.isfinite(vectors).all():
-              raise RuntimeError("Bekko encoder smoke test failed")
-          print("Bekko CPU smoke test passed")
+          import gzip
+          import tempfile
+          from pathlib import Path
+          from scripts.wikipedia_bundle import links, make_bundle
+          from scripts.bundle_artifacts import verify_bundle
+
+          with tempfile.TemporaryDirectory(prefix="wiki-smoke-") as tmp:
+              root = Path(tmp)
+              source = root / "smoke.txt.gz"
+              articles = (
+                  ("Orion", "Orion constellation includes bright stars and nebulae."),
+                  ("Pacific", "Ocean currents move seawater along continental shores."),
+                  ("Calculus", "Calculus studies rates of change and mathematical functions."),
+              )
+              with gzip.open(source, "wt", encoding="utf-8") as output:
+                  for title, body in articles:
+                      output.write(f"{title}\\n{body}\\n\\n")
+              release = root / "bundle"
+              make_bundle([source], release, "en",
+                          links("ffatty/plaintext-wikipedia-full-english"), {"smoke": True})
+              if verify_bundle(release)["documents"] != len(articles):
+                  raise RuntimeError("Miniature bundle dropped articles")
+              print("Real CPU encoder and full miniature bundle passed", flush=True)
           PY
           df -h .
       - name: Collect complete converted source artifacts
