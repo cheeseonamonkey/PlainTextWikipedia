@@ -6,6 +6,7 @@ on:
         description: Existing Wikipedia dataset repository
         type: string
         required: true
+        default: ffatty/plaintext-wikipedia-full-english
       bundle_run_id:
         description: Resume the retained bundle from this prior run ID (no feature rebuild)
         type: string
@@ -83,8 +84,8 @@ jobs:
           path: release
       - name: Install CPU dependencies
         run: |
-          python -m pip install --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1 regex pyarrow pyyaml kaggle six requests
-          python -m pip install --no-cache-dir 'sentence-transformers[openvino]>=5.0' 'transformers>=5.12'
+          python -m pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install --no-cache-dir -r requirements-encoder.txt
       - name: Check all publisher credentials before building
         if: inputs.publish
         run: python -m scripts.publish_preflight

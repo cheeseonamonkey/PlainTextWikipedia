@@ -7,20 +7,16 @@ from __future__ import annotations
 import numpy as np
 
 MODEL_ID = "hotchpotch/bekko-embedding-v1-a8m"
+MODEL_REVISION = "c721113d59a1d91b447450324f51c4b3332c924a"
 MODEL_DIMS = 128
 MAX_TOKENS = 256
 BATCH_SIZE = 16
 
 
 def embedding_input(title: str, body: str) -> str:
-    """Deterministic bounded excerpt. Exact normalization matches word lists."""
-    try:
-        from scripts.article_features import fold
-    except ModuleNotFoundError as exc:
-        if exc.name != "scripts":
-            raise
-        from article_features import fold
-    return fold(f"{title} {body[:1100]}".strip())[:1600]
+    """Keep readable, case-preserving text for the pretrained model."""
+    return f"{title.strip()} {body[:1100].strip()}"[:1600]
+
 
 
 class BekkoEncoder:
@@ -29,6 +25,7 @@ class BekkoEncoder:
 
         self.model = SentenceTransformer(
             MODEL_ID,
+            revision=MODEL_REVISION,
             backend="openvino",
             device="cpu",
             truncate_dim=MODEL_DIMS,

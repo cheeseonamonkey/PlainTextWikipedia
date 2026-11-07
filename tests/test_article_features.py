@@ -38,10 +38,10 @@ class BundleTests(unittest.TestCase):
     def test_one_parquet_one_text_independent_vectors_full_word_statistics(self):
         dest = self.root / 'out'
         with patch('scripts.bekko_features.BekkoEncoder', FakeBekko):
-            report = build(self.files, dest, 'fr', vocab_size=2, shortlist=1, threads=1)
+            report = build(self.files, dest, 'fr', vocab_size=2, threads=1)
         table = pq.read_table(dest / 'articles.parquet')
         self.assertEqual(table.num_rows, 3)
-        self.assertEqual(table.num_columns, 33)
+        self.assertEqual(table.num_columns, 32)
         for excluded in ('source_file','source_ordinal','token_count','word_count','byte_count',
                          'embedding_200','contradiction_score','vader_compound','saliency'):
             self.assertNotIn(excluded, table.column_names)
@@ -60,8 +60,19 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(words['tailword']['tf'],1)
         self.assertEqual(words['stars']['df'],1)
         self.assertGreater(len(words), report['vocabulary_size'])
-        self.assertEqual(report['fasttext']['training_tokens'],sum(len(tokens(b)) for _,b in self.docs))
+        self.assertGreater(report['fasttext']['training_tokens'], 0)
+        self.assertLess(report['fasttext']['training_tokens'],sum(len(tokens(b)) for _,b in self.docs))
         self.assertFalse(any('sqlite' in p.name for p in dest.iterdir()))
+        import fasttext
+        import zstandard as zstd
+        model_path = self.root / 'trained.bin'
+        with (dest / 'fasttext.bin.zst').open('rb') as source, model_path.open('wb') as target:
+            zstd.ZstdDecompressor().copy_stream(source, target)
+        with gzip.open(dest / 'vocabulary.json.gz', 'rt') as source:
+            vocabulary_terms = {item['term'] for item in json.load(source)['terms']}
+        model = fasttext.load_model(str(model_path))
+        self.assertEqual(set(model.get_words()) - {'</s>'}, vocabulary_terms)
+
 
     def test_bundle_integrity_and_packaging(self):
         import zipfile
@@ -70,7 +81,7 @@ class BundleTests(unittest.TestCase):
             manifest = make_bundle(self.files,output,'simple',links('owner/repo'),{'fixture':True})
         self.assertEqual(set(manifest['files']),PAYLOAD)
         with zipfile.ZipFile(output/'features.zip') as z:
-            self.assertEqual(set(z.namelist()),{'corpus-profile.json','vocabulary.json.gz','words.jsonl.gz'})
+            self.assertEqual(set(z.namelist()),{'corpus-profile.json','vocabulary.json.gz','words.jsonl.gz','normalized-words.jsonl.gz'})
         with zipfile.ZipFile(output/'models.zip') as z:
             self.assertEqual(set(z.namelist()),{'fasttext.bin.zst','config.json'})
         self.assertEqual(verify_bundle(output),manifest)
@@ -103,7 +114,7 @@ class PublicationContractTests(unittest.TestCase):
         from scripts.wikipedia_bundle import publish_all, sha256
         output=self.root/'release'
         with patch('scripts.bekko_features.BekkoEncoder',FakeBekko):
-            make_bundle(self.files,output,'fr',links('ffatty/plaintext-wikipedia-full-french'),{'fixture':True})
+            make_bundle(self.files,output,'fr',links('ffatty/plaintext-wikipedia-full-french','https://zenodo.org/records/123'),{'fixture':True})
         with patch.dict(os.environ,{'HF_TOKEN':'test','KAGGLE_TOKEN':'test','ZENODO_TOKEN':'test'}), patch('scripts.wikipedia_bundle.publish_hf') as hf, patch('scripts.wikipedia_bundle.publish_kaggle') as kg, patch('scripts.wikipedia_bundle.zenodo_publish') as zn:
             api=SimpleNamespace(repo_info=lambda *a,**k:SimpleNamespace(sha='fixed'))
             publish_all(api,'ffatty/plaintext-wikipedia-full-french',output,123)

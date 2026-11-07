@@ -5,7 +5,8 @@ Each language produces one article-row Parquet, one combined `txt.xz`, full corp
 word statistics and independent fastText/Bekko features. The identical verified
 bundle is delivered to Hugging Face, Kaggle and Zenodo.
 
-See [the output contract and limitations](docs/article-features.md).
+See [the output contract and limitations](docs/article-features.md) and
+[the refactor review findings](docs/review-findings.md).
 [One-language build](.github/workflows/article-features-one.yml) and
 [fleet build](.github/workflows/article-features-fleet.yml) are manual;
 publication defaults to **off**. XML rebuilds use the same final builder.

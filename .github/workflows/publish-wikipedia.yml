@@ -35,43 +35,17 @@ jobs:
         id: resolve
         shell: bash
         run: |
-          set -euo pipefail
-          . config/datasets.env
-          code="${LANGUAGE%wiki}"
-          hf_key="FULL_HF_REPO_${code^^}"
-          kaggle_key="FULL_KAGGLE_DATASET_${code^^}"
-          hf_id="$HF_REPO_INPUT"
-          kaggle_id="$KAGGLE_DATASET_INPUT"
-          if [[ -z "$hf_id" ]]; then hf_id="${!hf_key:-}"; fi
-          if [[ -z "$kaggle_id" ]]; then kaggle_id="${!kaggle_key:-}"; fi
-          if [[ "$LANGUAGE" == "simplewiki" ]]; then
-            [[ -n "$hf_id" ]] || hf_id="$SIMPLE_HF_REPO"
-            [[ -n "$kaggle_id" ]] || kaggle_id="$SIMPLE_KAGGLE_DATASET"
-          fi
-          case "$code" in
-            en) name=English ;; es) name=Spanish ;; fr) name=French ;;
-            de) name=German ;; it) name=Italian ;; pt) name=Portuguese ;;
-            ru) name=Russian ;; zh) name=Chinese ;; no) name=Norwegian ;;
-            simple) name="Simple English" ;;
-            *) name="" ;;
-          esac
-          if [[ -z "$name" ]]; then
-            IFS='|' read -r name slug < <(python scripts/language_info.py "$LANGUAGE")
-            if [[ -z "$hf_id" ]]; then hf_id="ffatty/plaintext-wikipedia-full-$slug"; fi
-            if [[ -z "$kaggle_id" ]]; then kaggle_id="ffatty/plaintext-wikipedia-full-$slug"; fi
-          fi
-          {
-            echo "FULL_HF_REPO=$hf_id"
-            echo "FULL_KAGGLE_DATASET=$kaggle_id"
-            echo "LANG_CODE=$code"
-            echo "LANG_NAME=$name"
-            echo "SOURCE_REPO_URL=$SOURCE_REPO_URL"
-            echo "UPSTREAM_REPO_URL=$UPSTREAM_REPO_URL"
-          } >> "$GITHUB_ENV"
-          echo "HF=$hf_id Kaggle=$kaggle_id"
-          echo "hf_repo=$hf_id" >> "$GITHUB_OUTPUT"
-      - name: Require identical dataset identifiers
-        run: test "$FULL_HF_REPO" = "$FULL_KAGGLE_DATASET"
+          python - <<'PYCODE'
+          import os
+          from scripts.wiki_metadata import project_repo, wiki_code
+          project = os.environ["LANGUAGE"]
+          repo = os.environ.get("HF_REPO_INPUT") or project_repo(project)
+          kaggle = os.environ.get("KAGGLE_DATASET_INPUT") or repo
+          if repo != kaggle or wiki_code(repo) + "wiki" != project:
+              raise ValueError("Language and publisher destinations must agree")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              print(f"hf_repo={repo}", file=output)
+          PYCODE
   publish:
     needs: resolve
     uses: ./.github/workflows/article-features-one.yml

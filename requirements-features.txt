@@ -1,0 +1,12 @@
+huggingface_hub
+numpy
+zstandard
+fasttext-wheel
+stopwordsiso==0.7.1
+PyStemmer==3.0.0
+regex
+pyarrow
+pyyaml
+kaggle
+six
+requests

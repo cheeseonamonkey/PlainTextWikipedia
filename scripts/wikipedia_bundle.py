@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -68,12 +69,26 @@ def download_sources(api, repo, folder):
         path = "data/" + name
         source = download(path)
         digest = sha256(source)
-        if not source_hash(tree[path]) or digest != source_hash(tree[path]):
-            raise ValueError(f"Source SHA256 mismatch: {path}")
+        verify_source(source, tree[path], digest)
         # Hardlink cached immutable blobs; avoid copying every input archive.
         link_or_copy(source, folder / name)
         provenance.append(dict(path=path, sha256=digest, bytes=source.stat().st_size))
     return complete_sources(folder, wiki_code(repo)), dict(repo=repo, revision=revision, archives=provenance)
+
+
+def verify_source(source, entry, digest):
+    expected = source_hash(entry)
+    if expected:
+        if digest != expected:
+            raise ValueError(f"Source SHA256 mismatch: {source.name}")
+        return
+    # Small HF files can be stored as ordinary Git blobs instead of LFS.
+    blob = hashlib.sha1(f"blob {source.stat().st_size}\0".encode(), usedforsecurity=False)
+    with source.open("rb") as stream:
+        while chunk := stream.read(8 * 1024 * 1024):
+            blob.update(chunk)
+    if blob.hexdigest() != getattr(entry, "blob_id", None):
+        raise ValueError(f"Source Git blob identity mismatch: {source.name}")
 
 
 def make_bundle(files, output, code, destinations, source):
@@ -88,7 +103,7 @@ def make_bundle(files, output, code, destinations, source):
         if not report["fasttext"]["available"]:
             raise ValueError("Complete fastText model required")
         archive(stage / "features.zip", [work / name for name in
-                ("corpus-profile.json", "vocabulary.json.gz", "words.jsonl.gz")])
+                ("corpus-profile.json", "vocabulary.json.gz", "words.jsonl.gz", "normalized-words.jsonl.gz")])
         model_config = work / "config.json"
         model_config.write_text(json.dumps({key: report[key] for key in ("fasttext", "bekko", "lexical")}, indent=2) + "\n")
         archive(stage / "models.zip", [work / "fasttext.bin.zst", model_config])
@@ -249,26 +264,47 @@ def publish_all(api, repo, folder, zenodo_id):
     for key in ("HF_TOKEN", "KAGGLE_TOKEN", "ZENODO_TOKEN"):
         if not os.getenv(key):
             raise ValueError(f"{key} required for full publishing")
-    # Each adapter consumes this same immutable local set. A failed target fails
-    # the job; cross-service publication cannot be an atomic transaction.
-    source = manifest.get("source", {})
-    revision = api.repo_info(repo, repo_type="dataset").sha
-    already_hf = False
-    if source.get("revision") and revision != source["revision"]:
-        remote_manifest = Path(hf_hub_download(repo, "manifest.json", repo_type="dataset", revision=revision, token=api.token))
-        if remote_manifest.read_bytes() != (folder / "manifest.json").read_bytes():
-            raise ValueError("Source repository changed during build; refusing stale publication")
-        already_hf = True  # Resume a failed downstream publisher from the same immutable bundle.
-    if already_hf:
-        verify_hf(api, repo, folder, revision, manifest)
-    else:
-        publish_hf(api, repo, folder, revision, manifest=manifest)
-    publish_kaggle(repo, folder, manifest=manifest)
+    expected_links = links(repo, f"https://zenodo.org/records/{zenodo_id}")
+    if manifest["links"] != expected_links:
+        raise ValueError("Publisher/repository links do not match the release destinations")
     assets = [Asset(name, meta["sha256"], meta["bytes"], meta["md5"])
               for name, meta in manifest["files"].items()]
     assets.append(Asset("manifest.json", sha256(folder / "manifest.json"), (folder / "manifest.json").stat().st_size))
-    zenodo_publish(api, repo, assets, dict(language=dataset_slug(repo), source_url=manifest["links"]["huggingface"],
-        links=manifest["links"], bundle=manifest), zenodo_id, local_folder=folder)
+    publishers = {
+        "huggingface": lambda: publish_hf_current(api, repo, folder, manifest),
+        "kaggle": lambda: publish_kaggle(repo, folder, manifest=manifest),
+        "zenodo": lambda: zenodo_publish(api, repo, assets,
+            dict(language=dataset_slug(repo), source_url=manifest["links"]["huggingface"],
+                 links=manifest["links"], bundle=manifest), zenodo_id, local_folder=folder),
+    }
+    errors, outcomes = [], {}
+    for name, publish in publishers.items():
+        try:
+            publish()
+            outcomes[name] = "success"
+        except Exception as exc:
+            exc.add_note(f"Publisher: {name}")
+            errors.append(exc)
+            outcomes[name] = f"failed ({type(exc).__name__})"
+        print(f"{name}: {outcomes[name]}", flush=True)
+    if summary := os.getenv("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a", encoding="utf-8") as stream:
+            stream.write("\n".join(f"- {name}: {state}" for name, state in outcomes.items()) + "\n")
+    if errors:
+        raise ExceptionGroup("Publication incomplete; retain this bundle and retry failed targets", errors)
+    return outcomes
+
+
+def publish_hf_current(api, repo, folder, manifest):
+    source = manifest.get("source", {})
+    revision = api.repo_info(repo, repo_type="dataset").sha
+    if source.get("revision") and revision != source["revision"]:
+        remote_manifest = Path(hf_hub_download(repo, "manifest.json", repo_type="dataset", revision=revision, token=api.token))
+        if remote_manifest.read_bytes() != (folder / "manifest.json").read_bytes():
+            raise ValueError("Source repository changed during build; refusing stale HF publication")
+        verify_hf(api, repo, folder, revision, manifest)
+    else:
+        publish_hf(api, repo, folder, revision, manifest=manifest)
 
 
 def main():

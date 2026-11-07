@@ -181,6 +181,23 @@ def list_matching_depositions(requests, url: str, headers: dict, title: str) -> 
     return matches
 
 
+def verify_zenodo_release(document, assets, folder):
+    if document.get("submitted") is not True:
+        raise ValueError("Zenodo publication is not confirmed submitted")
+    files = document.get("files", [])
+    remote = {item["filename"]: item for item in files}
+    if len(remote) != len(files) or set(remote) != {Path(asset.path).name for asset in assets}:
+        raise ValueError("Published Zenodo file set differs from the bundle")
+    for asset in assets:
+        expected = asset.md5
+        if expected is None:
+            with (folder / asset.path).open("rb") as stream:
+                expected = hashlib.file_digest(stream, "md5").hexdigest()
+        item = remote[Path(asset.path).name]
+        if int(item.get("filesize", -1)) != asset.size or str(item.get("checksum", "")).removeprefix("md5:") != expected:
+            raise ValueError(f"Published Zenodo checksum mismatch: {asset.path}")
+
+
 def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
                    record_id: int | None, *, local_folder: Path | None = None):
     import requests
@@ -236,15 +253,7 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     if prior and prior.get("submitted") and prior.get("metadata", {}).get("notes") == (
             f"wikidata-parquet-manifest-sha256:{fingerprint}"):
         if local_folder is not None:
-            remote = {f["filename"]: f for f in prior.get("files", [])}
-            if set(remote) != {Path(a.path).name for a in assets}:
-                raise ValueError("Published Zenodo file set differs from the bundle")
-            for asset in assets:
-                item = remote[Path(asset.path).name]
-                with (local_folder / asset.path).open("rb") as stream:
-                    digest = hashlib.file_digest(stream, "md5").hexdigest()
-                if int(item.get("filesize", -1)) != asset.size or str(item.get("checksum", "")).removeprefix("md5:") != digest:
-                    raise ValueError("Published Zenodo checksum mismatch")
+            verify_zenodo_release(prior, assets, local_folder)
         print(f"SKIP Zenodo: published edition is current ({record_id})", flush=True)
         return
 
@@ -340,6 +349,12 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     published = requests.post(publish_url, headers=headers, timeout=90)
     published.raise_for_status()
     doc = published.json()
+    if local_folder is not None:
+        if "submitted" not in doc or "files" not in doc:
+            response = requests.get(f"{url}/{draft['id']}", headers=headers, timeout=30)
+            response.raise_for_status()
+            doc = response.json()
+        verify_zenodo_release(doc, assets, local_folder)
     print(f"Zenodo publication: {doc.get('doi_url') or doc.get('record_url')}", flush=True)
 
 

@@ -8,6 +8,19 @@ from pathlib import Path
 
 import numpy as np
 
+VERSION = 7
+ARTICLE_FIELDS = (
+    "title", "article_url", "char_count", "sentence_count", "distinct_terms",
+    "mean_sentence_tokens", "mean_token_chars", "lexical_diversity",
+    "hapax_ratio", "stopword_ratio", "digit_ratio", "punctuation_ratio",
+    "repetition_ratio", "entropy", "normalized_entropy", "simpson_diversity",
+    "vocab_coverage", "mean_idf", "idf_std",
+    "tfidf_l2", "tfidf_top5_share", "tfidf_entropy", "title_overlap",
+    "word_counts", "tfidf", "bm25", "keywords", "fasttext", "bekko",
+    "bekko_input_tokens", "bekko_truncated",
+)
+
+
 # Keys absent from a source are not hallucinated. Preserve nullability explicitly.
 TEXT = {"title", "article_url", "word_counts", "tfidf", "bm25", "keywords", "fasttext", "bekko"}
 INTEGER = {"char_count", "sentence_count", "distinct_terms", "bekko_input_tokens", "bekko_truncated"}
@@ -20,7 +33,7 @@ def schema(fields):
                             pa.large_string() if name in TEXT else
                             pa.int64() if name in INTEGER else pa.float64())
                    for name in fields)
-    return pa.schema(columns, metadata={b"article_features_schema": b"6"})
+    return pa.schema(columns, metadata={b"article_features_schema": str(VERSION).encode()})
 
 
 class ArticleParquet:

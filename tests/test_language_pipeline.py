@@ -15,6 +15,8 @@ class LanguagePipelineTests(unittest.TestCase):
             self.assertEqual(job['uses'],'./.github/workflows/article-features-one.yml')
         single=workflow('article-features-one.yml')
         self.assertEqual(single['on']['workflow_dispatch']['inputs']['publish']['default'],'false')
+        self.assertEqual(single['on']['workflow_dispatch']['inputs']['repo_id']['default'],
+                         'ffatty/plaintext-wikipedia-full-english')
         self.assertEqual(single['on']['workflow_call']['inputs']['publish']['default'],'false')
         self.assertNotIn('mirror_kaggle',str(single))
         script=str(single['jobs']['bundle']['steps'])
@@ -31,3 +33,9 @@ class LanguagePipelineTests(unittest.TestCase):
                 uses=job.get('uses','')
                 if uses.startswith('./.github/workflows/'):
                     self.assertTrue((ROOT/Path(uses).name).exists(),uses)
+
+    def test_catalog_is_the_only_language_destination_mapping(self):
+        from scripts.wiki_metadata import project_repo, repository_codes
+        for repo, code in repository_codes().items():
+            self.assertEqual(project_repo(code + 'wiki'), repo)
+        self.assertNotIn('case "$code"', (ROOT/'publish-wikipedia.yml').read_text())

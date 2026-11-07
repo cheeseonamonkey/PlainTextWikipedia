@@ -16,10 +16,10 @@ REPO = 'ffatty/plaintext-wikipedia-full-french'
 class BundleSafetyTests(unittest.TestCase):
     setUp = fixtures.BundleTests.setUp
 
-    def make_release(self):
+    def make_release(self, zenodo_url=None):
         output = self.root / 'release'
         with patch('scripts.bekko_features.BekkoEncoder', fixtures.FakeBekko):
-            bundle.make_bundle(self.files, output, 'fr', bundle.links(REPO), {'revision': 'source'})
+            bundle.make_bundle(self.files, output, 'fr', bundle.links(REPO, zenodo_url), {'revision': 'source'})
         return output
 
     def test_top_level_complete_cannot_hide_failed_root(self):
@@ -48,17 +48,18 @@ class BundleSafetyTests(unittest.TestCase):
         self.assertEqual((output / 'manifest.json').read_bytes(), before)
 
     def test_resume_rechecks_hf_artifacts_even_when_manifest_matches(self):
-        output = self.make_release()
+        output = self.make_release("https://zenodo.org/records/123")
         api = SimpleNamespace(token=None, repo_info=lambda *a, **k: SimpleNamespace(sha='published'),
                               list_repo_tree=lambda *a, **k: [])
         with patch.dict(os.environ, {'HF_TOKEN':'x','KAGGLE_TOKEN':'x','ZENODO_TOKEN':'x'}), \
              patch('scripts.wikipedia_bundle.hf_hub_download', return_value=str(output / 'manifest.json')), \
              patch('scripts.wikipedia_bundle.publish_kaggle') as kaggle, \
              patch('scripts.wikipedia_bundle.zenodo_publish') as zenodo:
-            with self.assertRaisesRegex(RuntimeError, 'HF artifact'):
+            with self.assertRaises(ExceptionGroup) as failure:
                 bundle.publish_all(api, REPO, output, 123)
-            kaggle.assert_not_called()
-            zenodo.assert_not_called()
+            self.assertIn('HF artifact', str(failure.exception.exceptions[0]))
+            kaggle.assert_called_once()
+            zenodo.assert_called_once()
 
     def test_kaggle_processing_upload_can_be_resumed_without_another_version(self):
         output = self.make_release()
@@ -166,3 +167,27 @@ class BundleSafetyTests(unittest.TestCase):
             db.execute('INSERT INTO articles VALUES (1, ?, 4)', ('Correct title',))
             with self.assertRaisesRegex(RuntimeError, 'article index'):
                 list(article_rows(db, text))
+
+    def test_all_publishers_are_attempted_and_failures_are_preserved(self):
+        output = self.make_release('https://zenodo.org/records/123')
+        with patch.dict(os.environ, {'HF_TOKEN':'x','KAGGLE_TOKEN':'x','ZENODO_TOKEN':'x'}), \
+             patch('scripts.wikipedia_bundle.publish_hf_current', side_effect=RuntimeError('HF unavailable')) as hf, \
+             patch('scripts.wikipedia_bundle.publish_kaggle', side_effect=TimeoutError('Kaggle unavailable')) as kaggle, \
+             patch('scripts.wikipedia_bundle.zenodo_publish') as zenodo:
+            with self.assertRaises(ExceptionGroup) as failure:
+                bundle.publish_all(None, REPO, output, 123)
+            self.assertEqual(len(failure.exception.exceptions), 2)
+            hf.assert_called_once()
+            kaggle.assert_called_once()
+            zenodo.assert_called_once()
+
+    def test_small_source_git_blob_identity_is_supported(self):
+        import hashlib
+        path = self.files[0]
+        data = path.read_bytes()
+        digest = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+        entry = SimpleNamespace(lfs=None, blob_id=digest)
+        bundle.verify_source(path, entry, bundle.sha256(path))
+        entry.blob_id = '0' * 40
+        with self.assertRaisesRegex(ValueError, 'Git blob identity'):
+            bundle.verify_source(path, entry, bundle.sha256(path))

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import yaml
 
-CANONICAL_NOTE = "<!-- canonical-article-features-v6 -->"
+from scripts.article_parquet import VERSION
+
+CANONICAL_NOTE = f"<!-- canonical-article-features-v{VERSION} -->"
 
 
 def update_card(content: str) -> str:

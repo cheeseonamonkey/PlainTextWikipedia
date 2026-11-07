@@ -1,4 +1,4 @@
-# Complete Wikipedia bundles (schema v6)
+# Complete Wikipedia bundles (schema v7)
 
 One shared implementation handles every language. The Wikimedia code affects
 article URLs, Unicode tokenization and stopword lookup; it does not select a
@@ -8,7 +8,7 @@ Each language dataset receives these **same five files on all three services**:
 
 | File | Contents |
 |---|---|
-| `articles.parquet` | One row per article; 33 columns; Zstandard-compressed row groups |
+| `articles.parquet` | One row per article; 32 columns; Zstandard-compressed row groups |
 | `articles.txt.xz` | All records combined: title, single-line body, blank line |
 | `features.zip` | Extract into `features/`: corpus profile, vocabulary and full word statistics |
 | `models.zip` | Extract into `models/`: compressed trained fastText model and model configuration |
@@ -29,7 +29,7 @@ Identity/content: `title`, `text`, `article_url`, `char_count`.
 Document metrics: `sentence_count`, `distinct_terms`, `mean_sentence_tokens`,
 `mean_token_chars`, `lexical_diversity`, `hapax_ratio`, `stopword_ratio`,
 `digit_ratio`, `punctuation_ratio`, `repetition_ratio`, `entropy`,
-`normalized_entropy`, `simpson_diversity`, `vocab_coverage`, `tfidf_coverage`,
+`normalized_entropy`, `simpson_diversity`, `vocab_coverage`,
 `mean_idf`, `idf_std`, `tfidf_l2`, `tfidf_top5_share`, `tfidf_entropy`, `title_overlap`.
 
 JSON columns: `word_counts` (all terms), `tfidf` (term → L2-normalized weight),
@@ -38,13 +38,26 @@ JSON columns: `word_counts` (all terms), `tfidf` (term → L2-normalized weight)
 
 Bekko metadata: `bekko_input_tokens`, `bekko_truncated`.
 
-TF-IDF uses a selected vocabulary (default 10K terms, 5K TF-IDF terms), not a
-claim of every term's per-article TF-IDF. Full per-article counts and full corpus
-TF/DF/IDF remain available, so other weighting schemes can be reconstructed.
-FastText trains on **every token of every article**, one CBOW epoch, and its
-article vector uses the full tokenized article. No training token cap or
-language-size exclusion exists. Bekko uses a bounded title/lead excerpt (256
-tokens); the full text is always retained. These embeddings are independent.
+TF-IDF, BM25 and fastText share **one top-10K vocabulary** after NFKC/case
+normalization, stopwordsiso filtering, dependency-backed Snowball stemming and
+removal of terms appearing in more than half the corpus (except one-document
+corpora). TF/DF counts merge inflected forms within each article before counting
+document frequency. A language without a supported stemmer retains normalized
+surface forms; this is explicit in the exported configuration. No hand-written
+stemming or English-only feature implementation is used.
+
+The article `word_counts` dictionary keeps all raw normalized surface forms,
+including words outside that feature vocabulary. Raw corpus statistics and
+pre-top-K normalized statistics are both exported. Every article is published,
+even if it has no selected terms; its fastText vector is then zero. FastText
+training visits every article and retains only the selected normalized terms,
+with one CBOW epoch and no article-sampling cap.
+
+Bekko receives an **original, case-preserving title/lead excerpt**, bounded to
+256 model tokens. It does not receive stemmed text. Its model revision is pinned
+and recorded. Original full text is always retained, and the two embeddings stay
+independent. `tfidf_coverage` was removed because it duplicates `vocab_coverage`
+when both use the same vocabulary.
 VADER, readability, saliency, contradiction and fused-vector features are removed.
 
 ## Corpus statistics
@@ -53,8 +66,9 @@ VADER, readability, saliency, contradiction and fused-vector features are remove
 min/max and approximate percentiles for numeric article columns, plus independent
 Bekko and fastText centroids. Percentiles use a deterministic 2048-row reservoir.
 `features/words.jsonl.gz` streams every term's corpus frequency, document frequency
-and smoothed IDF without a vocabulary cap. `features/vocabulary.json.gz` records
-the selected lexical vocabulary and TF-IDF flags. Corpus counts/embeddings have
+and smoothed IDF without a vocabulary cap. `features/normalized-words.jsonl.gz`
+records stemmed/stopword-filtered TF/DF/IDF before top-K selection.
+`features/vocabulary.json.gz` records the shared selected vocabulary and settings. Corpus counts/embeddings have
 clear aggregate definitions; titles and URLs are article-only attributes.
 
 ## Build, then publish
@@ -66,14 +80,16 @@ The manual one-language/fleet workflows call this same command. Rebuild workflow
 convert XML into temporary source shards, require successful source coverage,
 then call the same bundle workflow. Every manual `publish` input defaults to false.
 All automatic publication, recovery and repair workflows have been removed.
+The one-language form defaults to **full English** for the first build-only
+acceptance run. Complete that test before a fleet rollout; no test has been launched.
 
 For `--publish`, all three credentials are required. Zenodo draft metadata is
 reserved before building so every file can contain its actual record link.
 **All data is built and verified before the first data upload**. HF receives one
 commit guarded by its parent revision; Kaggle receives a fresh version with
-`--keep-tabular`; Zenodo receives the same local files. The job fails if a target
-fails. Services do not support an atomic cross-service transaction: a downstream
-failure can leave earlier targets updated. Retained bundle artifacts permit retry
+`--keep-tabular`; Zenodo receives the same local files. All three targets are attempted, even if an earlier upload fails; the job then
+reports all failures together. Services do not support an atomic cross-service
+transaction, so failed targets may temporarily lag successful ones. Retained bundle artifacts permit retry
 with `--resume --publish`; incomplete remote publication is never labeled complete.
 The one-language workflow accepts `bundle_run_id` to restore a retained bundle
 and resume it on GitHub. A build-only bundle can be published this way without

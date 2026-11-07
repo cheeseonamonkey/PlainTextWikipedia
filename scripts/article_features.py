@@ -15,7 +15,6 @@ import lzma
 import math
 import os
 import re
-import regex
 import sqlite3
 import subprocess
 import sys
@@ -23,7 +22,6 @@ import tempfile
 import unicodedata
 import zlib
 from collections import Counter
-from functools import lru_cache
 from itertools import islice, zip_longest
 from pathlib import Path
 
@@ -31,79 +29,25 @@ import numpy as np
 
 try:
     from scripts.repack_shards import records
+    from scripts.article_parquet import VERSION, ARTICLE_FIELDS
+    from scripts.bekko_features import MODEL_ID, MODEL_REVISION, MODEL_DIMS as BEKKO_DIMS, MAX_TOKENS, BATCH_SIZE
+    from scripts.lexical_features import fold, tokens, LexicalNormalizer, MAX_DF_RATIO
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from repack_shards import records
+    from article_parquet import VERSION, ARTICLE_FIELDS
+    from bekko_features import MODEL_ID, MODEL_REVISION, MODEL_DIMS as BEKKO_DIMS, MAX_TOKENS, BATCH_SIZE
+    from lexical_features import fold, tokens, LexicalNormalizer, MAX_DF_RATIO
 
-VERSION = 6
 VOCAB_SIZE = 10_000
-TFIDF_SIZE = 5_000
 FASTTEXT_DIMS = 160
-BEKKO_DIMS = 128
 K1, B = 1.5, 0.75
-# Don't transliterate: those letters are necessary for multilingual text.
-FOLD = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"',
-                      "‐": "-", "‑": "-", "‒": "-", "–": "-",
-                      "—": "-", "―": "-", "\u00a0": " ", "…": "..."})
-WORD = regex.compile(r"[\p{L}\p{N}\p{M}]+(?:['-][\p{L}\p{N}\p{M}]+)*")
 SENTENCES = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])")
-EN_STOP = set(("a an and are as at be been being but by can could did do does "
-               "for from had has have he her hers him his how i if in into is it "
-               "its me my no nor not of on or our ours she so some such than that "
-               "the their them there these they this those through to too was we "
-               "were what when where which while who whom why will with would you "
-               "your yours also about after all any because before between both "
-               "each few more most other over own same should then very "
-               "via per may many one two three first second").split())
-ARTICLE_FIELDS = (
-    "title", "article_url", "char_count", "sentence_count", "distinct_terms",
-    "mean_sentence_tokens", "mean_token_chars", "lexical_diversity",
-    "hapax_ratio", "stopword_ratio", "digit_ratio", "punctuation_ratio",
-    "repetition_ratio", "entropy", "normalized_entropy", "simpson_diversity",
-    "vocab_coverage", "tfidf_coverage", "mean_idf", "idf_std",
-    "tfidf_l2", "tfidf_top5_share", "tfidf_entropy", "title_overlap",
-    "word_counts", "tfidf", "bm25", "keywords", "fasttext", "bekko",
-    "bekko_input_tokens", "bekko_truncated",
-)
 
 
 def compact(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-
-
-def fold(text: str) -> str:
-    return unicodedata.normalize("NFKC", text.translate(FOLD)).casefold()
-
-
-def tokens(text: str) -> list[str]:
-    """Unicode word segmentation; add overlapping CJK/Thai character bigrams."""
-    normalized = fold(text)
-    parts = WORD.findall(normalized)
-    result = []
-    for word in parts:
-        # No whitespace: CJK/Thai word runs need subword tokens.
-        if len(word) > 1 and any(
-            "\u3040" <= ch <= "\u30ff" or "\u3400" <= ch <= "\u9fff"
-            or "\u0e00" <= ch <= "\u0e7f" for ch in word
-        ):
-            result.extend(word[i:i + 2] for i in range(len(word) - 1))
-        else:
-            result.append(word)
-    return result
-
-
-@lru_cache(maxsize=256)
-def language_stopwords(code: str) -> frozenset[str]:
-    """Aggressive multilingual lists where available, plus corpus high-df stopwords."""
-    words = set(EN_STOP) if code in {"en", "simple"} else set()
-    try:
-        from stopwordsiso import stopwords
-    except ImportError:
-        return frozenset(words)
-    iso = "en" if code == "simple" else code.split("_", 1)[0].split("-", 1)[0]
-    words.update(fold(term) for term in (stopwords(iso) or ()))
-    return frozenset(words)
 
 
 def idf(docs: int, df: int) -> float:
@@ -140,15 +84,16 @@ def open_database(path: Path):
         id INTEGER PRIMARY KEY, title TEXT NOT NULL, article_url TEXT,
         counts BLOB NOT NULL, token_count INTEGER NOT NULL,
         char_count INTEGER NOT NULL, sentence_count INTEGER NOT NULL)""")
-    db.execute("CREATE TABLE terms(term TEXT PRIMARY KEY, tf INTEGER NOT NULL, df INTEGER NOT NULL)")
+    for table in ("terms", "lexical_terms"):
+        db.execute(f"CREATE TABLE {table}(term TEXT PRIMARY KEY, tf INTEGER NOT NULL, df INTEGER NOT NULL)")
     return db
 
 
 def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
-           code: str,
+           code: str, normalizer,
            text_output: Path | None = None) -> dict:
-    articles = total_tokens = training_tokens = 0
-    terms_tf, terms_df = Counter(), Counter()
+    articles = total_tokens = 0
+    tallies = {table: (Counter(), Counter()) for table in ("terms", "lexical_terms")}
     buffered = []
 
     def flush():
@@ -157,15 +102,15 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
                 title,article_url,counts,token_count,char_count,sentence_count)
                 VALUES (?,?,?,?,?,?)""", buffered)
             buffered.clear()
-        if terms_tf:
-            db.executemany("""INSERT INTO terms VALUES(?,?,?)
+        for table, (tf, df) in tallies.items():
+            db.executemany(f"""INSERT INTO {table} VALUES(?,?,?)
                 ON CONFLICT(term) DO UPDATE SET
                 tf = tf + excluded.tf, df = df + excluded.df""",
-                ((term, tf, terms_df[term]) for term, tf in terms_tf.items()))
-            terms_tf.clear()
-            terms_df.clear()
+                ((term, count, df[term]) for term, count in tf.items()))
+            tf.clear()
+            df.clear()
         db.commit()
-    train_stream = training.open("w", encoding="utf-8")
+    train_stream = gzip.open(training, "wt", encoding="utf-8", compresslevel=1)
     text_stream = lzma.open(text_output, "wt", encoding="utf-8", newline="\n", preset=3) if text_output else None
     try:
         for title, body in source_articles(files):
@@ -183,20 +128,19 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
                 url = article_url(title, code)
             articles += 1
             total_tokens += len(words)
-            terms_tf.update(counts)
-            terms_df.update(counts.keys())
+            normalized = normalizer.counts(counts)
+            for table, values in (("terms", counts), ("lexical_terms", normalized)):
+                tallies[table][0].update(values)
+                tallies[table][1].update(values.keys())
             packed = zlib.compress(compact(counts).encode("utf-8"), level=1)
             buffered.append((title, url, packed, len(words), len(body), len(sentences)))
-            if words:
-                train_stream.write(" ".join(words) + "\n")
-                training_tokens += len(words)
-            if len(buffered) >= 512 or len(terms_tf) >= 100_000:
+            train_stream.write(" ".join(normalizer.words(words)) + "\n")
+            if len(buffered) >= 512 or len(tallies["terms"][0]) >= 100_000:
                 flush()
         flush()
         if articles == 0:
             raise ValueError("No articles found")
         return {"articles": articles, "tokens": total_tokens,
-                "train_tokens": training_tokens,
                 "raw_vocabulary": db.execute("SELECT count(*) FROM terms").fetchone()[0]}
     finally:
         train_stream.close()
@@ -213,26 +157,21 @@ def article_rows(db, text_path):
         yield {**dict(row), "text": record[1]}
 
 
-def vocabulary(db, documents: int, code: str, limit: int, shortlist: int):
-    # High-df terms function as language-specific stopwords; English also has
-    # a small fixed function-word list. Corpus-specific filtering is reproducible.
-    blocked = language_stopwords(code)
-    ordered = db.execute("SELECT term,tf,df FROM terms ORDER BY tf DESC, term LIMIT ?", (max(limit * 15, 25000),))
-    selected = []
-    for term, tf, df in ordered:
-        if (term in blocked or df > max(1, documents * .80)
-                or not term.strip("-'") or len(term) > 64
-                or not any(ch.isalpha() for ch in term)):
-            continue
-        selected.append((term, int(tf), int(df)))
-        if len(selected) == limit:
-            break
-    # Prefer frequent terms that are also distinctive, not just rare proper nouns.
-    tfidf_ranks = sorted(selected, key=lambda x: (-(x[1] * idf(documents, x[2])), x[0]))
-    enabled = {term for term, _, _ in tfidf_ranks[:shortlist]}
-    entries = [(i, term, tf, df, idf(documents, df), int(term in enabled))
-               for i, (term, tf, df) in enumerate(selected)]
-    return entries
+def vocabulary(db, documents, limit):
+    ordered = db.execute("SELECT term,tf,df FROM lexical_terms WHERE df <= ? ORDER BY tf DESC, term LIMIT ?",
+                         (max(1, documents * MAX_DF_RATIO), limit))
+    return [dict(term=term, tf=tf, df=df, idf=idf(documents, df)) for term, tf, df in ordered]
+
+
+def prepare_training(candidate, destination, vocabulary):
+    count = 0
+    with gzip.open(candidate, "rt", encoding="utf-8") as source, destination.open("w", encoding="utf-8") as out:
+        for line in source:
+            words = [word for word in line.split() if word in vocabulary]
+            out.write(" ".join(words) + "\n")
+            count += len(words)
+    candidate.unlink()
+    return count
 
 
 def train_fasttext_worker(inp: Path, model_path: Path, dim: int, threads: int):
@@ -262,7 +201,7 @@ def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
 
 
 def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
-                        model, bekko_embedding, bekko_tokens):
+                        model, bekko_embedding, bekko_tokens, normalizer):
     title, url, body = row["title"], row["article_url"], row["text"]
     blob, length, chars, sentences = (row[key] for key in
         ("counts", "token_count", "char_count", "sentence_count"))
@@ -272,24 +211,24 @@ def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
     total = max(1, length)
     distinct = len(counts)
     entropy = -sum(n / total * math.log(n / total) for n in counts.values())
-    known = {term: n for term, n in counts.items() if term in vocabulary_lookup}
+    known = {term: n for term, n in normalizer.counts(counts).items() if term in vocabulary_lookup}
     weighted, bm = {}, {}
     for term, n in known.items():
-        _, df, value_idf, enabled = vocabulary_lookup[term]
-        if enabled:
-            weighted[term] = (1 + math.log(n)) * value_idf
-            bm[term] = bm_idf(docs, df) * n * (K1 + 1) / (
-                n + K1 * (1 - B + B * length / max(1, avglen)))
+        meta = vocabulary_lookup[term]
+        weighted[term] = (1 + math.log(n)) * meta["idf"]
+        bm[term] = bm_idf(docs, meta["df"]) * n * (K1 + 1) / (
+            n + K1 * (1 - B + B * length / max(1, avglen)))
     l2 = math.sqrt(sum(v * v for v in weighted.values()))
     mass = sum(weighted.values())
     top = sorted(weighted.items(), key=lambda pair: (-pair[1], pair[0]))[:16]
     known_count = sum(known.values())
-    mean_idf = sum(vocabulary_lookup[t][2] * n for t, n in known.items()) / max(1, known_count)
-    title_terms = set(tokens(title))
-    # Include all article terms, including terms outside the TF-IDF shortlist.
+    mean_idf = sum(vocabulary_lookup[t]["idf"] * n for t, n in known.items()) / max(1, known_count)
+    title_terms = set(normalizer.words(tokens(title)))
+    # Use exactly the same reduced vocabulary as fastText training.
     vector = np.zeros(FASTTEXT_DIMS, dtype=np.float32)
-    if length:
-        vector = norm(np.asarray(model.get_sentence_vector(" ".join(tokens(body))), dtype=np.float32))
+    model_words = list(normalizer.words(tokens(body), vocabulary_lookup))
+    if model_words:
+        vector = norm(np.asarray(model.get_sentence_vector(" ".join(model_words)), dtype=np.float32))
     if vector.shape != (FASTTEXT_DIMS,):
         raise ValueError("Invalid fastText embedding dimensions")
     return dict(
@@ -305,9 +244,8 @@ def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
         normalized_entropy=entropy / math.log(distinct) if distinct > 1 else 0.,
         simpson_diversity=1 - sum((n / total) ** 2 for n in counts.values()) if length else 0.,
         vocab_coverage=known_count / total,
-        tfidf_coverage=sum(counts[t] for t in weighted) / total,
         mean_idf=mean_idf,
-        idf_std=math.sqrt(sum(n * (vocabulary_lookup[t][2] - mean_idf) ** 2
+        idf_std=math.sqrt(sum(n * (vocabulary_lookup[t]["idf"] - mean_idf) ** 2
                                for t, n in known.items()) / max(1, known_count)),
         tfidf_l2=l2, tfidf_top5_share=sum(v for _, v in top[:5]) / mass if mass else 0.,
         tfidf_entropy=-sum(v / mass * math.log(v / mass) for v in weighted.values()) if mass else 0.,
@@ -317,7 +255,7 @@ def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
         bm25=compact(bm), keywords=compact(dict(top)),
         fasttext=compact(vector.tolist()),
         bekko=compact(norm(bekko_embedding).tolist()),
-        bekko_input_tokens=bekko_tokens, bekko_truncated=int(bekko_tokens > 256))
+        bekko_input_tokens=bekko_tokens, bekko_truncated=int(bekko_tokens > MAX_TOKENS))
 
 
 def sha256(path: Path) -> str:
@@ -335,14 +273,14 @@ def compress(source: Path, destination: Path):
 
 
 def build(files: list[Path], output: Path, code: str, *,
-          vocab_size: int = VOCAB_SIZE, shortlist: int = TFIDF_SIZE,
+          vocab_size: int = VOCAB_SIZE,
           timeout: int = 0, threads: int = 2) -> dict:
     if not files or len({p.resolve() for p in files}) != len(files):
         raise ValueError("Provide distinct source archives")
     if any(not p.is_file() or not p.name.endswith((".txt.gz", ".txt.xz")) for p in files):
         raise ValueError("Provide existing .txt.gz archives")
-    if not 1 <= shortlist <= vocab_size <= 50_000:
-        raise ValueError("Require 1 <= tfidf size <= vocab size <= 50000")
+    if not 1 <= vocab_size <= VOCAB_SIZE:
+        raise ValueError("Require 1 <= vocabulary size <= 10000")
     if not re.fullmatch(r"[a-z0-9_-]+", code):
         raise ValueError("Expected a Wikimedia language code")
     if threads < 1 or timeout < 0:
@@ -352,18 +290,22 @@ def build(files: list[Path], output: Path, code: str, *,
         stage = Path(work)
         database = stage / "articles.sqlite"
         training = stage / "fasttext-training.txt"
+        candidate = stage / "lexical-training.txt.gz"
+        normalizer = LexicalNormalizer(code)
         model_path = stage / "fasttext.bin"
         db = open_database(database)
         try:
             text_path = stage / "articles.txt.xz"
-            totals = ingest(sorted(files), db, training, code,
+            totals = ingest(sorted(files), db, candidate, code, normalizer,
                             text_output=text_path)
-            entries = vocabulary(db, totals["articles"], code, vocab_size, shortlist)
-            lookup = {term: (index, df, value_idf, enabled)
-                      for index, term, _, df, value_idf, enabled in entries}
-            stopwords = set(language_stopwords(code)).union(
+            print(f"Indexed {totals['articles']:,} articles; fitting shared vocabulary", flush=True)
+            entries = vocabulary(db, totals["articles"], vocab_size)
+            lookup = {entry["term"]: entry for entry in entries}
+            stopwords = set(normalizer.stopwords).union(
                 term for (term,) in db.execute(
-                    "SELECT term FROM terms WHERE df > ?", (totals["articles"] * .80,)))
+                    "SELECT term FROM terms WHERE df > ?", (totals["articles"] * MAX_DF_RATIO,)))
+            totals["train_tokens"] = prepare_training(candidate, training, lookup)
+            print(f"Training fastText: {len(lookup):,} terms, {totals['train_tokens']:,} tokens", flush=True)
             model = train_fasttext(training, model_path, totals["train_tokens"],
                                            timeout=timeout, threads=threads)
             training.unlink()
@@ -386,7 +328,7 @@ def build(files: list[Path], output: Path, code: str, *,
             parquet = ArticleParquet(article_path, ARTICLE_FIELDS)
             try:
                 cur = article_rows(db, text_path)
-                while chunk := list(islice(cur, 16)):
+                while chunk := list(islice(cur, BATCH_SIZE)):
                     inputs = [embedding_input(row["title"], row["text"]) for row in chunk]
                     embeddings, lengths = encoder.encode(inputs)
                     if len(embeddings) != len(chunk) or len(lengths) != len(chunk):
@@ -394,12 +336,13 @@ def build(files: list[Path], output: Path, code: str, *,
                     for row, bekko_vector, input_tokens in zip(chunk, embeddings, lengths):
                         result = metrics_for_article(row, lookup, stopwords,
                                                      totals["articles"], avglen,
-                                                     model, bekko_vector, input_tokens)
+                                                     model, bekko_vector, input_tokens, normalizer)
                         if set(result) != set(ARTICLE_FIELDS):
                             raise RuntimeError("Article-feature schema mismatch")
                         parquet.add(row["text"], result)
                         profile.add(result)
-                    print(f"Embedded {parquet.count}/{totals['articles']} articles", flush=True)
+                    if parquet.count % 1024 == 0 or parquet.count == totals["articles"]:
+                        print(f"Embedded {parquet.count}/{totals['articles']} articles", flush=True)
             finally:
                 parquet.close()
             if parquet.count != totals["articles"]:
@@ -408,23 +351,22 @@ def build(files: list[Path], output: Path, code: str, *,
             profile_path.write_text(json.dumps(profile.export(), ensure_ascii=False,
                                                separators=(",", ":")) + "\n", encoding="utf-8")
             # Full corpus TF/DF/IDF, streamed without a vocabulary cap.
-            full_words = stage / "words.jsonl.gz"
-            with gzip.open(full_words, "wt", encoding="utf-8") as out:
-                for term, tf, df in db.execute("SELECT term,tf,df FROM terms ORDER BY term"):
-                    out.write(compact(dict(term=term, tf=tf, df=df,
-                                           idf=idf(totals["articles"], df))) + "\n")
+            word_files = []
+            for table, name in (("terms", "words.jsonl.gz"), ("lexical_terms", "normalized-words.jsonl.gz")):
+                path = stage / name
+                with gzip.open(path, "wt", encoding="utf-8") as out:
+                    for term, tf, df in db.execute(f"SELECT term,tf,df FROM {table} ORDER BY term"):
+                        out.write(compact(dict(term=term, tf=tf, df=df, idf=idf(totals["articles"], df))) + "\n")
+                word_files.append(path)
             db.close()
             words_path = stage / "vocabulary.json.gz"
             with gzip.open(words_path, "wt", encoding="utf-8", compresslevel=6) as out:
                 json.dump({"version": VERSION, "language": code, "documents": totals["articles"],
                            "vocab_size": len(entries),
-                           "tfidf_size": sum(entry[5] for entry in entries),
                            "average_document_tokens": avglen,
-                           "terms": [{"id": idx, "term": term, "tf": tf, "df": df,
-                                      "idf": idfval, "tfidf": bool(active)}
-                                     for idx, term, tf, df, idfval, active in entries]},
+                           "normalization": normalizer.config(), "terms": entries},
                           out, ensure_ascii=False, separators=(",", ":"))
-            artifacts = [article_path, text_path, profile_path, words_path, full_words]
+            artifacts = [article_path, text_path, profile_path, words_path, *word_files]
             model = None
             compressed_model = stage / "fasttext.bin.zst"
             compress(model_path, compressed_model)
@@ -434,26 +376,23 @@ def build(files: list[Path], output: Path, code: str, *,
                 "documents": totals["articles"], "raw_tokens": totals["tokens"],
                 "average_document_tokens": avglen,
                 "raw_vocabulary": totals["raw_vocabulary"],
-                "vocabulary_size": len(entries), "tfidf_size": sum(entry[5] for entry in entries),
+                "vocabulary_size": len(entries),
                 "fasttext": {"available": model_path.exists(),
                              "dim": FASTTEXT_DIMS, "algorithm": "cbow",
                              "epoch": 1, "subword_bucket": 30000,
                              "training_tokens": totals["train_tokens"],
-                             "training": "all tokens in every article",
+                             "training": "every article, restricted to the shared top-10000 normalized vocabulary",
                              "timeout_seconds": timeout or None},
-                "bekko": {"model": "hotchpotch/bekko-embedding-v1-a8m",
-                          "backend": "openvino", "device": "cpu", "dimensions": 128,
-                          "max_input_tokens": 256, "batch_size": 16,
-                          "input": "NFKC+casefold title and bounded lead excerpt",
+                "bekko": {"model": MODEL_ID, "revision": MODEL_REVISION,
+                          "backend": "openvino", "device": "cpu", "dimensions": BEKKO_DIMS,
+                          "max_input_tokens": MAX_TOKENS, "batch_size": BATCH_SIZE,
+                          "input": "original case-preserving title and bounded lead excerpt",
                           "required": True},
                 "primary_table": "articles.parquet",
                 "corpus_profile": "corpus-profile.json",
-                "lexical": {"normalization": "NFKC+casefold+common_quote_dash_fold",
-                            "max_df_ratio": 0.8,
-                            "stopwords": "stopwordsiso (if installed) + English defaults + high-df filtering",
-                            "idf": "ln((N+1)/(df+1))+1",
-                            "bm25": {"k1": K1, "b": B},
-                            "word_counts": "full counts per article; full corpus TF/DF/IDF in words.jsonl.gz"},
+                "lexical": {**normalizer.config(), "vocabulary_limit": vocab_size,
+                            "idf": "ln((N+1)/(df+1))+1", "bm25": {"k1": K1, "b": B},
+                            "word_counts": "raw article counts; raw and normalized corpus TF/DF/IDF exported"},
                 "files": {},
             }
             for file in artifacts:
@@ -476,7 +415,6 @@ def main():
     p.add_argument("--output", type=Path, default=Path("article-features"))
     p.add_argument("--language", default="en")
     p.add_argument("--vocab", type=int, default=VOCAB_SIZE)
-    p.add_argument("--tfidf", type=int, default=TFIDF_SIZE)
     p.add_argument("--fasttext-timeout", type=int, default=0)
     p.add_argument("--threads", type=int, default=2)
     args = p.parse_args()
@@ -487,7 +425,7 @@ def main():
     if not args.sources:
         p.error("At least one source .txt.gz required")
     report = build(args.sources, args.output, args.language, vocab_size=args.vocab,
-                   shortlist=args.tfidf, timeout=args.fasttext_timeout,
+                   timeout=args.fasttext_timeout,
                    threads=args.threads)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

@@ -10,13 +10,12 @@ import shutil
 import zipfile
 from pathlib import Path
 
-from scripts.article_features import ARTICLE_FIELDS, VERSION
-from scripts.article_parquet import schema
+from scripts.article_parquet import ARTICLE_FIELDS, VERSION, schema
 
 PAYLOAD = frozenset({'articles.parquet', 'articles.txt.xz', 'features.zip', 'models.zip'})
 RELEASE_FILES = PAYLOAD | {'manifest.json'}
 ARCHIVE_MEMBERS = {
-    'features.zip': {'corpus-profile.json', 'vocabulary.json.gz', 'words.jsonl.gz'},
+    'features.zip': {'corpus-profile.json', 'vocabulary.json.gz', 'words.jsonl.gz', 'normalized-words.jsonl.gz'},
     'models.zip': {'fasttext.bin.zst', 'config.json'},
 }
 
