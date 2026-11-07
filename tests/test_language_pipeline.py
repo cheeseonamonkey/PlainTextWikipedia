@@ -34,6 +34,24 @@ class LanguagePipelineTests(unittest.TestCase):
                 if uses.startswith('./.github/workflows/'):
                     self.assertTrue((ROOT/Path(uses).name).exists(),uses)
 
+    def test_all_publish_entries_require_explicit_opt_in(self):
+        for file in ROOT.glob('*.yml'):
+            events = workflow(file.name).get('on', {})
+            for trigger in ('workflow_dispatch', 'workflow_call'):
+                settings = events.get(trigger, {}).get('inputs', {}).get('publish')
+                if settings is not None:
+                    self.assertEqual(settings.get('default'), 'false', (file.name, trigger))
+
+    def test_real_model_smoke_precedes_full_bundle_build(self):
+        steps = workflow('article-features-one.yml')['jobs']['bundle']['steps']
+        labels = [step.get('name') for step in steps]
+        smoke = labels.index('Sanity-check bundle imports and real CPU Bekko inference')
+        build = labels.index('Build and verify everything, then optionally publish')
+        self.assertLess(smoke, build)
+        self.assertIn('BekkoEncoder().encode', steps[smoke]['run'])
+        self.assertIn('np.isfinite', steps[smoke]['run'])
+        self.assertIn('source', labels[build - 1].lower())
+
     def test_catalog_is_the_only_language_destination_mapping(self):
         from scripts.wiki_metadata import project_repo, repository_codes
         for repo, code in repository_codes().items():
