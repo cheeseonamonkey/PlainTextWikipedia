@@ -115,7 +115,7 @@ jobs:
               )
               with gzip.open(source, "wt", encoding="utf-8") as output:
                   for title, body in articles:
-                      output.write(f"{title}\\n{body}\\n\\n")
+                      output.write(f"{title}\n{body}\n\n")
               release = root / "bundle"
               make_bundle([source], release, "en",
                           links("ffatty/plaintext-wikipedia-full-english"), {"smoke": True})
