@@ -24,6 +24,7 @@ import unicodedata
 import zlib
 from collections import Counter
 from functools import lru_cache
+from itertools import islice, zip_longest
 from pathlib import Path
 
 import numpy as np
@@ -55,7 +56,7 @@ EN_STOP = set(("a an and are as at be been being but by can could did do does "
                "your yours also about after all any because before between both "
                "each few more most other over own same should then very "
                "via per may many one two three first second").split())
-CSV_FIELDS = (
+ARTICLE_FIELDS = (
     "title", "article_url", "char_count", "sentence_count", "distinct_terms",
     "mean_sentence_tokens", "mean_token_chars", "lexical_diversity",
     "hapax_ratio", "stopword_ratio", "digit_ratio", "punctuation_ratio",
@@ -68,7 +69,7 @@ CSV_FIELDS = (
 
 
 def compact(obj) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def fold(text: str) -> str:
@@ -114,32 +115,32 @@ def bm_idf(docs: int, df: int) -> float:
 
 
 def norm(values: np.ndarray) -> np.ndarray:
-    length = np.linalg.norm(values)
+    values = np.asarray(values, dtype=np.float32)
+    if values.ndim != 1 or not values.size or not np.isfinite(values).all():
+        raise ValueError("Expected a finite, nonempty embedding vector")
+    length = np.linalg.norm(values.astype(np.float64))
     return values / length if length > 1e-10 else values
 
 
 def source_articles(files: list[Path]):
     for file in files:
-        for ordinal, record in enumerate(records(file), 1):
+        for record in records(file):
             raw_title, raw_text, _ = record.split(b"\n", 2)
-            yield file.name, ordinal, raw_title.decode("utf-8").rstrip("\r"), raw_text.decode("utf-8").rstrip("\r")
+            yield raw_title.decode("utf-8").rstrip("\r"), raw_text.decode("utf-8").rstrip("\r")
 
 
 def open_database(path: Path):
     db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=OFF")
     db.execute("PRAGMA synchronous=OFF")
-    db.execute("PRAGMA temp_store=MEMORY")
+    db.execute("PRAGMA temp_store=FILE")
     db.execute("PRAGMA cache_size=-32768")
     db.execute("""CREATE TABLE articles(
-        id INTEGER PRIMARY KEY, source_file TEXT NOT NULL,
-        source_ordinal INTEGER NOT NULL, title TEXT NOT NULL, article_url TEXT,
-        text TEXT, counts BLOB NOT NULL, token_count INTEGER NOT NULL,
-        char_count INTEGER NOT NULL, byte_count INTEGER NOT NULL,
-        sentence_count INTEGER NOT NULL,
-        UNIQUE(source_file,source_ordinal))""")
+        id INTEGER PRIMARY KEY, title TEXT NOT NULL, article_url TEXT,
+        counts BLOB NOT NULL, token_count INTEGER NOT NULL,
+        char_count INTEGER NOT NULL, sentence_count INTEGER NOT NULL)""")
     db.execute("CREATE TABLE terms(term TEXT PRIMARY KEY, tf INTEGER NOT NULL, df INTEGER NOT NULL)")
-    db.execute("CREATE TABLE vocabulary(id INTEGER PRIMARY KEY, term TEXT UNIQUE, tf INTEGER, df INTEGER, idf REAL, tfidf_enabled INTEGER)")
     return db
 
 
@@ -153,9 +154,8 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
     def flush():
         if buffered:
             db.executemany("""INSERT INTO articles(
-                source_file,source_ordinal,title,article_url,text,counts,
-                token_count,char_count,byte_count,sentence_count)
-                VALUES (?,?,?,?,?,?,?,?,?,?)""", buffered)
+                title,article_url,counts,token_count,char_count,sentence_count)
+                VALUES (?,?,?,?,?,?)""", buffered)
             buffered.clear()
         if terms_tf:
             db.executemany("""INSERT INTO terms VALUES(?,?,?)
@@ -168,13 +168,11 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
     train_stream = training.open("w", encoding="utf-8")
     text_stream = lzma.open(text_output, "wt", encoding="utf-8", newline="\n", preset=3) if text_output else None
     try:
-        for source, ordinal, title, body in source_articles(files):
+        for title, body in source_articles(files):
             if text_stream:
                 text_stream.write(f"{title}\n{body}\n\n")
             words = tokens(body)
             counts = Counter(words)
-            if not counts:
-                counts = Counter()
             sentences = [s.strip() for s in SENTENCES.split(body) if s.strip()]
             url = None
             if code:
@@ -188,13 +186,11 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
             terms_tf.update(counts)
             terms_df.update(counts.keys())
             packed = zlib.compress(compact(counts).encode("utf-8"), level=1)
-            buffered.append((source, ordinal, title, url, body,
-                             packed, len(words), len(body), len(body.encode("utf-8")),
-                             len(sentences)))
+            buffered.append((title, url, packed, len(words), len(body), len(sentences)))
             if words:
                 train_stream.write(" ".join(words) + "\n")
                 training_tokens += len(words)
-            if len(buffered) >= 512:
+            if len(buffered) >= 512 or len(terms_tf) >= 100_000:
                 flush()
         flush()
         if articles == 0:
@@ -206,6 +202,15 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
         train_stream.close()
         if text_stream:
             text_stream.close()
+
+
+def article_rows(db, text_path):
+    """Read bodies from the combined text instead of storing a second plaintext copy."""
+    cursor = db.execute("SELECT * FROM articles ORDER BY id")
+    for row, record in zip_longest(cursor, source_articles([text_path])):
+        if row is None or record is None or row["title"] != record[0] or row["char_count"] != len(record[1]):
+            raise RuntimeError("Combined text does not match the article index")
+        yield {**dict(row), "text": record[1]}
 
 
 def vocabulary(db, documents: int, code: str, limit: int, shortlist: int):
@@ -227,8 +232,6 @@ def vocabulary(db, documents: int, code: str, limit: int, shortlist: int):
     enabled = {term for term, _, _ in tfidf_ranks[:shortlist]}
     entries = [(i, term, tf, df, idf(documents, df), int(term in enabled))
                for i, (term, tf, df) in enumerate(selected)]
-    db.executemany("INSERT INTO vocabulary VALUES (?,?,?,?,?,?)", entries)
-    db.commit()
     return entries
 
 
@@ -244,27 +247,27 @@ def train_fasttext_worker(inp: Path, model_path: Path, dim: int, threads: int):
 
 
 def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
-                   threads: int = 2, timeout: int = 0,
-                   allow_lexical_only: bool = False):
+                   threads: int = 2, timeout: int = 0):
     if train_tokens < 1:
-        if allow_lexical_only:
-            return None, "insufficient_training_tokens"
-        raise ValueError("Insufficient fastText training data; use --allow-lexical-only explicitly")
+        raise ValueError("No tokenized text is available to train fastText")
     command = [sys.executable, str(Path(__file__).resolve()), "_train",
                str(training), str(dest), str(FASTTEXT_DIMS), str(threads)]
     try:
         subprocess.run(command, check=True, timeout=timeout or None, capture_output=True)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-        if not allow_lexical_only:
-            raise RuntimeError(f"fastText failed; install fasttext-wheel or use --allow-lexical-only: {exc}") from exc
-        return None, type(exc).__name__
+    except subprocess.CalledProcessError as exc:
+        details = (exc.stderr or b"").decode("utf-8", errors="replace")[-2000:]
+        raise RuntimeError(f"fastText training failed: {details}") from exc
     import fasttext
-    return fasttext.load_model(str(dest)), None
+    return fasttext.load_model(str(dest))
 
 
 def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
                         model, bekko_embedding, bekko_tokens):
-    _, _, _, title, url, body, blob, length, chars, _, sentences = row
+    title, url, body = row["title"], row["article_url"], row["text"]
+    blob, length, chars, sentences = (row[key] for key in
+        ("counts", "token_count", "char_count", "sentence_count"))
+    if np.asarray(bekko_embedding).shape != (BEKKO_DIMS,):
+        raise ValueError("Invalid Bekko embedding dimensions")
     counts = json.loads(zlib.decompress(blob))
     total = max(1, length)
     distinct = len(counts)
@@ -285,8 +288,10 @@ def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
     title_terms = set(tokens(title))
     # Include all article terms, including terms outside the TF-IDF shortlist.
     vector = np.zeros(FASTTEXT_DIMS, dtype=np.float32)
-    if model is not None and length:
+    if length:
         vector = norm(np.asarray(model.get_sentence_vector(" ".join(tokens(body))), dtype=np.float32))
+    if vector.shape != (FASTTEXT_DIMS,):
+        raise ValueError("Invalid fastText embedding dimensions")
     return dict(
         title=title, article_url=url, char_count=chars, sentence_count=sentences,
         distinct_terms=distinct, mean_sentence_tokens=length / max(1, sentences),
@@ -310,7 +315,7 @@ def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
         word_counts=compact(counts),
         tfidf=compact({t: v / l2 for t, v in weighted.items()}) if l2 else "{}",
         bm25=compact(bm), keywords=compact(dict(top)),
-        fasttext=compact(vector.tolist()) if model is not None else None,
+        fasttext=compact(vector.tolist()),
         bekko=compact(norm(bekko_embedding).tolist()),
         bekko_input_tokens=bekko_tokens, bekko_truncated=int(bekko_tokens > 256))
 
@@ -331,14 +336,17 @@ def compress(source: Path, destination: Path):
 
 def build(files: list[Path], output: Path, code: str, *,
           vocab_size: int = VOCAB_SIZE, shortlist: int = TFIDF_SIZE,
-          timeout: int = 0, threads: int = 2,
-          bekko: bool = True) -> dict:
-    if not files or any(not p.is_file() or not p.name.endswith((".txt.gz", ".txt.xz")) for p in files):
+          timeout: int = 0, threads: int = 2) -> dict:
+    if not files or len({p.resolve() for p in files}) != len(files):
+        raise ValueError("Provide distinct source archives")
+    if any(not p.is_file() or not p.name.endswith((".txt.gz", ".txt.xz")) for p in files):
         raise ValueError("Provide existing .txt.gz archives")
     if not 1 <= shortlist <= vocab_size <= 50_000:
         raise ValueError("Require 1 <= tfidf size <= vocab size <= 50000")
     if not re.fullmatch(r"[a-z0-9_-]+", code):
         raise ValueError("Expected a Wikimedia language code")
+    if threads < 1 or timeout < 0:
+        raise ValueError("Require positive threads and a nonnegative timeout")
     output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".features-", dir=output) as work:
         stage = Path(work)
@@ -356,12 +364,10 @@ def build(files: list[Path], output: Path, code: str, *,
             stopwords = set(language_stopwords(code)).union(
                 term for (term,) in db.execute(
                     "SELECT term FROM terms WHERE df > ?", (totals["articles"] * .80,)))
-            model, reason = train_fasttext(training, model_path, totals["train_tokens"],
-                                           timeout=timeout, threads=threads,
-                                           allow_lexical_only=False)
+            model = train_fasttext(training, model_path, totals["train_tokens"],
+                                           timeout=timeout, threads=threads)
+            training.unlink()
             avglen = totals["tokens"] / totals["articles"]
-            if not bekko:
-                raise ValueError("Bekko is required for complete semantic features")
             try:
                 from scripts.bekko_features import BekkoEncoder, embedding_input
             except ModuleNotFoundError as exc:
@@ -377,14 +383,11 @@ def build(files: list[Path], output: Path, code: str, *,
                 from article_parquet import ArticleParquet, CorpusProfile
             profile = CorpusProfile()
             article_path = stage / "articles.parquet"
-            parquet = ArticleParquet(article_path, CSV_FIELDS)
+            parquet = ArticleParquet(article_path, ARTICLE_FIELDS)
             try:
-                cur = db.execute("""SELECT id,source_file,source_ordinal,title,
-                    article_url,text,counts,token_count,char_count,byte_count,
-                    sentence_count FROM articles ORDER BY id""")
-                from itertools import islice
+                cur = article_rows(db, text_path)
                 while chunk := list(islice(cur, 16)):
-                    inputs = [embedding_input(row[3], row[5]) for row in chunk]
+                    inputs = [embedding_input(row["title"], row["text"]) for row in chunk]
                     embeddings, lengths = encoder.encode(inputs)
                     if len(embeddings) != len(chunk) or len(lengths) != len(chunk):
                         raise RuntimeError("Bekko did not return one vector per article")
@@ -392,9 +395,9 @@ def build(files: list[Path], output: Path, code: str, *,
                         result = metrics_for_article(row, lookup, stopwords,
                                                      totals["articles"], avglen,
                                                      model, bekko_vector, input_tokens)
-                        if set(result) != set(CSV_FIELDS):
+                        if set(result) != set(ARTICLE_FIELDS):
                             raise RuntimeError("Article-feature schema mismatch")
-                        parquet.add(row[5], result)
+                        parquet.add(row["text"], result)
                         profile.add(result)
                     print(f"Embedded {parquet.count}/{totals['articles']} articles", flush=True)
             finally:
@@ -422,18 +425,17 @@ def build(files: list[Path], output: Path, code: str, *,
                                      for idx, term, tf, df, idfval, active in entries]},
                           out, ensure_ascii=False, separators=(",", ":"))
             artifacts = [article_path, text_path, profile_path, words_path, full_words]
-            if model is not None:
-                model = None
-                compressed_model = stage / "fasttext.bin.zst"
-                compress(model_path, compressed_model)
-                artifacts.append(compressed_model)
+            model = None
+            compressed_model = stage / "fasttext.bin.zst"
+            compress(model_path, compressed_model)
+            artifacts.append(compressed_model)
             report = {
                 "version": VERSION, "language": code,
                 "documents": totals["articles"], "raw_tokens": totals["tokens"],
                 "average_document_tokens": avglen,
                 "raw_vocabulary": totals["raw_vocabulary"],
                 "vocabulary_size": len(entries), "tfidf_size": sum(entry[5] for entry in entries),
-                "fasttext": {"available": model_path.exists(), "reason": reason,
+                "fasttext": {"available": model_path.exists(),
                              "dim": FASTTEXT_DIMS, "algorithm": "cbow",
                              "epoch": 1, "subword_bucket": 30000,
                              "training_tokens": totals["train_tokens"],
@@ -450,8 +452,7 @@ def build(files: list[Path], output: Path, code: str, *,
                             "max_df_ratio": 0.8,
                             "stopwords": "stopwordsiso (if installed) + English defaults + high-df filtering",
                             "idf": "ln((N+1)/(df+1))+1",
-                            "bm15": {"k1": K1, "b": B},
-
+                            "bm25": {"k1": K1, "b": B},
                             "word_counts": "full counts per article; full corpus TF/DF/IDF in words.jsonl.gz"},
                 "files": {},
             }
@@ -478,8 +479,6 @@ def main():
     p.add_argument("--tfidf", type=int, default=TFIDF_SIZE)
     p.add_argument("--fasttext-timeout", type=int, default=0)
     p.add_argument("--threads", type=int, default=2)
-    p.add_argument("--no-bekko", action="store_true",
-                   help="Disable Bekko (incomplete release; rejected by full builder)")
     args = p.parse_args()
     if args.sources and args.sources[0].name == "_train":
         train_fasttext_worker(Path(args.sources[1]), Path(args.sources[2]),
@@ -489,7 +488,7 @@ def main():
         p.error("At least one source .txt.gz required")
     report = build(args.sources, args.output, args.language, vocab_size=args.vocab,
                    shortlist=args.tfidf, timeout=args.fasttext_timeout,
-                   threads=args.threads, bekko=not args.no_bekko)
+                   threads=args.threads)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

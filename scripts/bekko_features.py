@@ -12,7 +12,7 @@ MAX_TOKENS = 256
 BATCH_SIZE = 16
 
 
-def embedding_input(title: str, body: str, sentence: str = "") -> str:
+def embedding_input(title: str, body: str) -> str:
     """Deterministic bounded excerpt. Exact normalization matches word lists."""
     try:
         from scripts.article_features import fold
@@ -20,10 +20,7 @@ def embedding_input(title: str, body: str, sentence: str = "") -> str:
         if exc.name != "scripts":
             raise
         from article_features import fold
-    lead = body[:1100]
-    # A separate salient sentence helps topic coverage when it is not the lead.
-    relevant = sentence[:300] if sentence not in lead else ""
-    return fold(" ".join(part for part in (title, lead, relevant) if part))[:1600]
+    return fold(f"{title} {body[:1100]}".strip())[:1600]
 
 
 class BekkoEncoder:

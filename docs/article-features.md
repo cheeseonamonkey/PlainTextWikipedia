@@ -18,6 +18,9 @@ ZIP packaging is identical everywhere because Zenodo cannot store native directo
 The contained statistics/model files are already compressed, so ZIP uses stored entries.
 No public databases, per-shard Parquets, SQL dumps or fused embeddings are generated.
 One temporary SQLite index supports exact corpus counts during the build and is deleted.
+It stores counts and article metadata, not another full plaintext corpus. The
+embedding pass streams article bodies from the combined `txt.xz` and checks them
+against that index. The temporary training text is deleted once fastText is loaded.
 
 ## Article columns
 
@@ -72,6 +75,16 @@ commit guarded by its parent revision; Kaggle receives a fresh version with
 fails. Services do not support an atomic cross-service transaction: a downstream
 failure can leave earlier targets updated. Retained bundle artifacts permit retry
 with `--resume --publish`; incomplete remote publication is never labeled complete.
+The one-language workflow accepts `bundle_run_id` to restore a retained bundle
+and resume it on GitHub. A build-only bundle can be published this way without
+recomputing features: only the manifest gets its newly reserved Zenodo link.
+Existing output directories are never overwritten by another build.
+
+Local verification checks exact file/archive membership, article schema, row
+count, sizes, SHA256 and MD5. HF retries recheck every artifact, including the
+manifest; Kaggle waits for an in-progress version and downloads that specific
+version for verification. ZIP member metadata is fixed, so file timestamps do
+not alter the archive identity.
 
 Source downloads are pinned to an immutable HF revision and their SHA256s checked.
 A missing/incomplete source coverage manifest fails the build; it requires source

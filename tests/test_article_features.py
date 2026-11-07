@@ -84,7 +84,7 @@ class BundleTests(unittest.TestCase):
         p.write_text(json.dumps({'complete':False}))
         with self.assertRaisesRegex(ValueError,'Incomplete'):
             complete_sources(self.root)
-        p.write_text(json.dumps({'complete':True,'roots':[{'files':[self.files[0].name]}]}))
+        p.write_text(json.dumps({'complete':True,'expected_shards':1,'roots':[{'root_shard':1,'complete':True,'files':[self.files[0].name]}]}))
         with self.assertRaisesRegex(ValueError,'differ'):
             complete_sources(self.root)
 

@@ -6,12 +6,19 @@ on:
         description: Existing Wikipedia dataset repository
         type: string
         required: true
+      bundle_run_id:
+        description: Resume the retained bundle from this prior run ID (no feature rebuild)
+        type: string
+        default: ''
       publish:
         description: Publish identical complete bundle to ALL three targets
         type: boolean
         default: false
   workflow_call:
     inputs:
+      bundle_run_id:
+        type: string
+        default: ''
       repo_id:
         type: string
         required: true
@@ -48,12 +55,32 @@ jobs:
       REPO: ${{ inputs.repo_id }}
       LANGUAGE: ${{ inputs.language }}
       PUBLISH: ${{ inputs.publish }}
+      BUNDLE_RUN_ID: ${{ inputs.bundle_run_id }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Resolve bundle identity and resume inputs
+        id: artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$BUNDLE_RUN_ID" && -n "$SOURCE_RUN_ID" ]]; then
+            echo "::error::Choose converted sources or a retained bundle, not both"
+            exit 1
+          fi
+          echo "name=${REPO##*/}" >> "$GITHUB_OUTPUT"
+      - name: Restore retained complete bundle
+        if: inputs.bundle_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.bundle_run_id }}
+          github-token: ${{ github.token }}
+          name: ${{ steps.artifact.outputs.name }}
+          path: release
       - name: Install CPU dependencies
         run: |
           python -m pip install --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1 regex pyarrow pyyaml kaggle six requests
@@ -90,12 +117,9 @@ jobs:
           set -euo pipefail
           args=(--repo "$REPO" --output release)
           if [[ -d sources ]]; then args+=(--sources sources); fi
+          if [[ -n "$BUNDLE_RUN_ID" ]]; then args+=(--resume); fi
           if [[ "$PUBLISH" == true ]]; then args+=(--publish); fi
           python -m scripts.wikipedia_bundle "${args[@]}"
-      - name: Name retained bundle
-        if: failure() || !inputs.publish
-        id: artifact
-        run: echo "name=${REPO##*/}" >> "$GITHUB_OUTPUT"
       - name: Retain verified bundle for inspection
         if: failure() || !inputs.publish
         uses: actions/upload-artifact@v4
