@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
 """Per-language, corpus-wide lexical + small fastText article features.
 
-Three phases: stream sources into a temporary SQLite corpus, fit a bounded
-vocabulary, then derive article metrics and int8 vectors. Never changes the
-canonical article archives or Parquet schema.
+Stream each source once into combined text and one temporary corpus index,
+then fit lexical features and independent fastText/Bekko embeddings.
+No database or combined embedding is published.
 """
 from __future__ import annotations
 
 import argparse
-import base64
 import gzip
 import hashlib
 import json
+import lzma
 import math
 import os
 import re
 import regex
 import sqlite3
-import struct
 import subprocess
 import sys
 import tempfile
@@ -36,16 +35,11 @@ except ModuleNotFoundError as exc:
         raise
     from repack_shards import records
 
-VERSION = 5
+VERSION = 6
 VOCAB_SIZE = 10_000
 TFIDF_SIZE = 5_000
-DENSE_DIMS = 200
 FASTTEXT_DIMS = 160
-FASTTEXT_PROJECTED_DIMS = 44
 BEKKO_DIMS = 128
-BEKKO_PROJECTED_DIMS = 128
-LEXICAL_DIMS = 16
-METRIC_DIMS = 12
 K1, B = 1.5, 0.75
 # Don't transliterate: those letters are necessary for multilingual text.
 FOLD = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"',
@@ -62,36 +56,14 @@ EN_STOP = set(("a an and are as at be been being but by can could did do does "
                "each few more most other over own same should then very "
                "via per may many one two three first second").split())
 CSV_FIELDS = (
-    "source_file", "source_ordinal", "title", "article_url",
-    "token_count", "distinct_terms", "vocab_terms", "tfidf_terms",
-    "char_count", "byte_count", "sentence_count", "mean_sentence_tokens",
-    "mean_token_chars", "lexical_diversity", "hapax_ratio", "stopword_ratio",
-    "oov_or_filtered_ratio", "digit_ratio", "punctuation_ratio", "repetition_ratio", "entropy",
-    "vocab_coverage", "tfidf_coverage", "mean_idf", "max_tfidf",
-    "tfidf_l2", "tfidf_top5_share", "tfidf_entropy",
-    "bm15_sum", "bm15_max", "saliency", "title_overlap",
-    "lead_relevance", "representative_sentence",
-    "word_counts_json", "tfidf_sparse_json", "bm15_sparse_json",
-    "keywords_json", "vector_q8_b64", "vector_scales_b64",
-    "fasttext_q8_b64", "fasttext_scales_b64",
-    "bekko_q8_b64", "bekko_scales_b64", "bekko_input_tokens",
-    "bekko_truncated", "bekko_available",
-    "semantic_available", "fasttext_training_tokens",
-    "effective_vocabulary", "normalized_entropy", "simpson_diversity",
-    "hapax_token_ratio", "rare_token_ratio", "rare_term_ratio",
-    "mean_term_frequency", "idf_std", "keyword_token_share",
-    "keyword_title_overlap", "title_tfidf_share", "bm15_mean",
-    "bm15_top5_share", "sentence_length_cv", "extractive_position",
-    "extractive_margin", "lead_keyword_overlap", "vector_quant_cosine",
-    "vector_active_fraction", "fusion_component_energy_json",
-    "word_counts_all_json", "hapax_count", "stopword_token_count",
-    "known_token_count", "tfidf_token_count", "digit_char_count",
-    "punctuation_char_count", "tfidf_raw_sum", "bm15_raw_sum",
-    "vader_compound", "vader_positive", "vader_neutral", "vader_negative",
-    "sentiment_valence_01", "sentiment_intensity_01", "sentiment_sample_chars",
-    "reading_grade", "reading_ease", "reading_difficulty_01",
-    "reading_sample_chars", "technicality_proxy_01", "lexical_cohesion_01",
-    "contradiction_score",
+    "title", "article_url", "char_count", "sentence_count", "distinct_terms",
+    "mean_sentence_tokens", "mean_token_chars", "lexical_diversity",
+    "hapax_ratio", "stopword_ratio", "digit_ratio", "punctuation_ratio",
+    "repetition_ratio", "entropy", "normalized_entropy", "simpson_diversity",
+    "vocab_coverage", "tfidf_coverage", "mean_idf", "idf_std",
+    "tfidf_l2", "tfidf_top5_share", "tfidf_entropy", "title_overlap",
+    "word_counts", "tfidf", "bm25", "keywords", "fasttext", "bekko",
+    "bekko_input_tokens", "bekko_truncated",
 )
 
 
@@ -146,95 +118,6 @@ def norm(values: np.ndarray) -> np.ndarray:
     return values / length if length > 1e-10 else values
 
 
-def quantize(vector: np.ndarray, block: int = 32) -> tuple[str, str]:
-    """Symmetric per-block int8 with float16 scales; accepts arbitrary dimensions."""
-    if not len(vector) or not np.isfinite(vector).all():
-        raise ValueError("Expected nonempty finite vector")
-    encoded, scales = bytearray(), bytearray()
-    for start in range(0, len(vector), block):
-        section = vector[start:start + block]
-        scale = float(np.max(np.abs(section))) / 127 if np.any(section) else 1.0
-        # Store the *rounded* scale used for quantization, so decoding agrees.
-        scale = struct.unpack("<e", struct.pack("<e", scale))[0]
-        if scale == 0:
-            scale = 1.0
-        encoded.extend(np.rint(np.clip(section / scale, -127, 127))
-                       .astype(np.int8).tobytes())
-        scales.extend(struct.pack("<e", scale))
-    return (base64.b64encode(encoded).decode("ascii"),
-            base64.b64encode(scales).decode("ascii"))
-
-
-def dequantize(encoded: str, scales: str) -> np.ndarray:
-    data = np.frombuffer(base64.b64decode(encoded), dtype=np.int8).astype(np.float32)
-    weights = np.frombuffer(base64.b64decode(scales), dtype="<f2").astype(np.float32)
-    return data * np.repeat(weights, 32)[:len(data)]
-
-
-def lexical_hash(scores: list[tuple[int, float]]) -> np.ndarray:
-    arr = np.zeros(LEXICAL_DIMS, dtype=np.float32)
-    for term_id, score in scores:
-        digest = hashlib.blake2s(str(term_id).encode(), digest_size=4).digest()
-        slot = int.from_bytes(digest, "little") % LEXICAL_DIMS
-        # Slot uses digest[0] low bits; using that byte's parity for
-        # sign makes half the buckets *always* negative. Keep independent.
-        sign = -1 if digest[3] & 1 else 1
-        arr[slot] += sign * score
-    return norm(arr)
-
-
-# Fixed signed random projection; no fitted cross-language parameters needed.
-FASTTEXT_PROJECTION = (np.random.default_rng(2026).choice(
-    [-1., 1.], (FASTTEXT_DIMS, FASTTEXT_PROJECTED_DIMS))
-    .astype(np.float32) / math.sqrt(FASTTEXT_PROJECTED_DIMS))
-
-
-# Fractions of *cosine similarity* attributable to each independent subspace,
-# not raw amplitude multipliers. Squared amplitudes determine dot-product share.
-FUSION_IMPORTANCE = {
-    "bekko": 0.46, "fasttext": 0.43,
-    "lexical": 0.03, "metrics": 0.08,
-}
-
-
-def combined_vector(semantic: np.ndarray | None, lexical: np.ndarray,
-                    metrics: list[float], bekko: np.ndarray
-                    ) -> tuple[np.ndarray, dict[str, float]]:
-    """Keep all 128 Bekko dims; randomly project fastText 160->48.
-
-    Concatenating L2-normalized orthogonal subspaces weighted by sqrt(p)
-    gives each component its prescribed contribution to cosine similarity.
-    """
-    if len(metrics) != METRIC_DIMS or bekko.shape != (BEKKO_DIMS,) or lexical.shape != (LEXICAL_DIMS,):
-        raise ValueError("Invalid mixed-vector inputs")
-    fasttext = (norm(np.asarray(semantic, dtype=np.float32) @ FASTTEXT_PROJECTION)
-                if semantic is not None else np.zeros(FASTTEXT_PROJECTED_DIMS, np.float32))
-    centered_metrics = (np.asarray(metrics, dtype=np.float32) - 0.5) * 2
-    blocks = {
-        "bekko": norm(np.asarray(bekko, dtype=np.float32)),
-        "fasttext": fasttext,
-        "lexical": norm(np.asarray(lexical, dtype=np.float32)),
-        "metrics": norm(centered_metrics),
-    }
-    if any(not np.isfinite(values).all() for values in blocks.values()):
-        raise ValueError("Non-finite embedding component")
-    weighted = {key: values * math.sqrt(FUSION_IMPORTANCE[key])
-                for key, values in blocks.items()}
-    values = np.concatenate([weighted[key] for key in ("bekko", "fasttext", "lexical", "metrics")])
-    if values.size != DENSE_DIMS:
-        raise RuntimeError("Invalid combined vector shape")
-    energy = {key: float(np.dot(value, value)) for key, value in weighted.items()}
-    total = sum(energy.values())
-    return norm(values), ({key: amount / total if total else 0.
-                           for key, amount in energy.items()})
-
-
-def vectorize(semantic: np.ndarray | None, lexical: np.ndarray,
-              metrics: list[float], bekko: np.ndarray) -> tuple[str, str]:
-    vector, _ = combined_vector(semantic, lexical, metrics, bekko)
-    return quantize(vector)
-
-
 def source_articles(files: list[Path]):
     for file in files:
         for ordinal, record in enumerate(records(file), 1):
@@ -242,7 +125,7 @@ def source_articles(files: list[Path]):
             yield file.name, ordinal, raw_title.decode("utf-8").rstrip("\r"), raw_text.decode("utf-8").rstrip("\r")
 
 
-def open_database(path: Path, fts5: bool):
+def open_database(path: Path):
     db = sqlite3.connect(path)
     db.execute("PRAGMA journal_mode=OFF")
     db.execute("PRAGMA synchronous=OFF")
@@ -257,15 +140,12 @@ def open_database(path: Path, fts5: bool):
         UNIQUE(source_file,source_ordinal))""")
     db.execute("CREATE TABLE terms(term TEXT PRIMARY KEY, tf INTEGER NOT NULL, df INTEGER NOT NULL)")
     db.execute("CREATE TABLE vocabulary(id INTEGER PRIMARY KEY, term TEXT UNIQUE, tf INTEGER, df INTEGER, idf REAL, tfidf_enabled INTEGER)")
-    db.execute("CREATE TABLE metrics(article_id INTEGER PRIMARY KEY, metrics_json TEXT NOT NULL)")
-    if fts5:
-        db.execute("""CREATE VIRTUAL TABLE article_fts USING fts5(
-            title, text, content='articles', content_rowid='id', tokenize='unicode61')""")
     return db
 
 
 def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
-           code: str, fts5: bool, max_train_tokens: int, sample_mod: int) -> dict:
+           code: str,
+           text_output: Path | None = None) -> dict:
     articles = total_tokens = training_tokens = 0
     terms_tf, terms_df = Counter(), Counter()
     buffered = []
@@ -286,8 +166,11 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
             terms_df.clear()
         db.commit()
     train_stream = training.open("w", encoding="utf-8")
+    text_stream = lzma.open(text_output, "wt", encoding="utf-8", newline="\n", preset=3) if text_output else None
     try:
         for source, ordinal, title, body in source_articles(files):
+            if text_stream:
+                text_stream.write(f"{title}\n{body}\n\n")
             words = tokens(body)
             counts = Counter(words)
             if not counts:
@@ -308,14 +191,9 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
             buffered.append((source, ordinal, title, url, body,
                              packed, len(words), len(body), len(body.encode("utf-8")),
                              len(sentences)))
-            # Stable deterministic sampling across every shard, bounded training.
-            key = hashlib.blake2s(f"{source}:{ordinal}".encode(), digest_size=4).digest()
-            if (training_tokens < max_train_tokens and words and
-                    int.from_bytes(key, "little") % sample_mod == 0):
-                selected = words[:min(256, max_train_tokens - training_tokens)]
-                if selected:
-                    train_stream.write(" ".join(selected) + "\n")
-                    training_tokens += len(selected)
+            if words:
+                train_stream.write(" ".join(words) + "\n")
+                training_tokens += len(words)
             if len(buffered) >= 512:
                 flush()
         flush()
@@ -326,6 +204,8 @@ def ingest(files: list[Path], db: sqlite3.Connection, training: Path,
                 "raw_vocabulary": db.execute("SELECT count(*) FROM terms").fetchone()[0]}
     finally:
         train_stream.close()
+        if text_stream:
+            text_stream.close()
 
 
 def vocabulary(db, documents: int, code: str, limit: int, shortlist: int):
@@ -357,23 +237,23 @@ def train_fasttext_worker(inp: Path, model_path: Path, dim: int, threads: int):
     # CBOW is a cheap context-learning baseline; subword buckets improve OOV.
     model = fasttext.train_unsupervised(str(inp), model="cbow",
                                        dim=dim, epoch=1, lr=.04, ws=5,
-                                       minCount=2, minn=2, maxn=4,
+                                       minCount=1, minn=2, maxn=4,
                                        neg=4, bucket=30000, thread=threads,
                                        verbose=0)
     model.save_model(str(model_path))
 
 
 def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
-                   threads: int = 2, timeout: int = 180,
+                   threads: int = 2, timeout: int = 0,
                    allow_lexical_only: bool = False):
-    if train_tokens < 1000:
+    if train_tokens < 1:
         if allow_lexical_only:
             return None, "insufficient_training_tokens"
         raise ValueError("Insufficient fastText training data; use --allow-lexical-only explicitly")
     command = [sys.executable, str(Path(__file__).resolve()), "_train",
                str(training), str(dest), str(FASTTEXT_DIMS), str(threads)]
     try:
-        subprocess.run(command, check=True, timeout=timeout, capture_output=True)
+        subprocess.run(command, check=True, timeout=timeout or None, capture_output=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         if not allow_lexical_only:
             raise RuntimeError(f"fastText failed; install fasttext-wheel or use --allow-lexical-only: {exc}") from exc
@@ -382,209 +262,57 @@ def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
     return fasttext.load_model(str(dest)), None
 
 
-def metrics_for_article(row, vocabulary_lookup, stopwords: set[str],
-                        docs: int, avglen: float,
-                        fasttext_vectors: np.ndarray | None, training_tokens: int,
-                        bekko_embedding: np.ndarray, bekko_tokens: int,
-                        diagnostics=None):
-    (article_id, source_file, ordinal, title, url, body, blob,
-     length, chars, bytes_, sentences) = row
+def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
+                        model, bekko_embedding, bekko_tokens):
+    _, _, _, title, url, body, blob, length, chars, _, sentences = row
     counts = json.loads(zlib.decompress(blob))
-    distinct = len(counts)
     total = max(1, length)
-    hapax = sum(c == 1 for c in counts.values())
-    entropy = -sum((n / total) * math.log(n / total) for n in counts.values()) if length else 0.
-    normalized_entropy = entropy / math.log(distinct) if distinct > 1 else 0.
-    simpson_diversity = (1. - sum(n * n for n in counts.values()) / (total * total)
-                         if length else 0.)
-    # Only retain vocabulary word counts in the CSV; the SQLite counts BLOB
-    # preserves *all* intermediary terms, including terms outside top 10K.
-    known = {term: count for term, count in counts.items() if term in vocabulary_lookup}
-    stop = sum(counts.get(term, 0) for term in stopwords)
-    weighted, bmweighted, vecterms = [], [], []
-    mass = bm_sum = 0.0
-    title_terms = set(tokens(title))
-    for term, count in known.items():
-        index, df, value_idf, enabled = vocabulary_lookup[term]
+    distinct = len(counts)
+    entropy = -sum(n / total * math.log(n / total) for n in counts.values())
+    known = {term: n for term, n in counts.items() if term in vocabulary_lookup}
+    weighted, bm = {}, {}
+    for term, n in known.items():
+        _, df, value_idf, enabled = vocabulary_lookup[term]
         if enabled:
-            score = (1 + math.log(count)) * value_idf
-            bm = bm_idf(docs, df) * (count * (K1 + 1)) / (
-                count + K1 * (1 - B + B * length / max(1, avglen)))
-            weighted.append((index, score, term))
-            bmweighted.append((index, bm, term))
-            mass += score * score
-            bm_sum += bm
-            if fasttext_vectors is not None:
-                vecterms.append((index, score))
-    l2 = math.sqrt(mass)
-    weighted.sort(key=lambda item: (-item[1], item[2]))
-    bmweighted.sort(key=lambda item: (-item[1], item[2]))
-    top = weighted[:16]
-    sparse = sorted((idx, round(value / l2, 7)) for idx, value, _ in weighted) if l2 else []
-    semantic = None
-    if fasttext_vectors is not None and mass:
-        indices = np.fromiter((index for index, _ in vecterms),
-                              dtype=np.intp, count=len(vecterms))
-        weights = np.fromiter((score / l2 for _, score in vecterms),
-                              dtype=np.float32, count=len(vecterms))
-        semantic = weights @ fasttext_vectors[indices]
-    lexical = lexical_hash(sparse)
-    vocab_coverage = sum(known.values()) / total
-    tfidf_coverage = sum(counts[t] for _, _, t in weighted) / total
-    tfidf_sum = sum(v for _, v, _ in weighted)
-    top5share = sum(value for _, value, _ in top[:5]) / max(1e-9, tfidf_sum)
-    concentration = (sum((v / tfidf_sum) ** 2 for _, v, _ in weighted)
-                     if tfidf_sum else 0.0)
-    tfidf_entropy = (-sum((v / tfidf_sum) * math.log(v / tfidf_sum)
-                          for _, v, _ in weighted) if tfidf_sum else 0.0)
-    known_tokens = sum(known.values())
-    mean_idf = (sum(vocabulary_lookup[t][2] * n for t, n in known.items()) /
-                max(1, known_tokens))
-    idf_std = math.sqrt(sum(n * (vocabulary_lookup[t][2] - mean_idf) ** 2
-                            for t, n in known.items()) / max(1, known_tokens))
-    rare = [(term, count) for term, count in known.items()
-            if vocabulary_lookup[term][1] / docs <= .05]
-    rare_token_ratio = sum(count for _, count in rare) / total
-    rare_term_ratio = len(rare) / max(1, len(known))
-    keyword_terms = {term for _, _, term in top}
-    keyword_token_share = sum(counts[term] for term in keyword_terms) / total
-    keyword_title_overlap = len(title_terms & keyword_terms) / max(1, len(keyword_terms))
-    title_tfidf_share = (sum(score for _, score, term in weighted if term in title_terms)
-                         / tfidf_sum if tfidf_sum else 0.)
-    bm15_top5_share = sum(score for _, score, _ in bmweighted[:5]) / max(1e-9, bm_sum)
-    title_overlap = len(title_terms.intersection(known)) / max(1, len(title_terms))
-    mean_token_chars = sum(len(term) * n for term, n in counts.items()) / total
-    repetition = max(counts.values(), default=0) / total
-    # Salient extractive sentence: the highest-scoring sentence among a bounded
-    # set, not a language-model summary; empty without stored body.
-    topweights = {t: v for _, v, t in weighted}
-    lead_relevance = lead_keyword_overlap = sentence_length_cv = 0.
-    extractive_position = extractive_margin = 0.
-    representative = ""
-    if body:
-        parts = [piece.strip() for piece in SENTENCES.split(body) if piece.strip()][:80]
-        best_score = second_score = -1.
-        best_position = 0
-        sentence_tokens_sum = sentence_tokens_sq = 0
-        for pos, sentence in enumerate(parts):
-            piece_tokens = tokens(sentence[:1200])
-            count = len(piece_tokens)
-            sentence_tokens_sum += count
-            sentence_tokens_sq += count * count
-            score = sum(topweights.get(word, 0.) for word in piece_tokens[:160])
-            score /= math.sqrt(max(1, count))
-            if pos == 0:
-                lead_relevance = score
-                lead_keyword_overlap = len(set(piece_tokens) & keyword_terms) / max(1, len(keyword_terms))
-            if score > best_score:
-                second_score, best_score = best_score, score
-                best_position = pos
-                representative = sentence[:320]
-            elif score > second_score:
-                second_score = score
-        count = len(parts)
-        mean_sentence_tokens = sentence_tokens_sum / max(1, count)
-        if mean_sentence_tokens:
-            variance = max(0., sentence_tokens_sq / count - mean_sentence_tokens ** 2)
-            sentence_length_cv = math.sqrt(variance) / mean_sentence_tokens
-        extractive_position = best_position / max(1, count - 1)
-        if best_score > 0:
-            extractive_margin = max(0., best_score - max(0., second_score)) / best_score
-    saliency = top[0][1] / max(1e-9, tfidf_sum) if top else 0.
-    digits = sum(ch.isdigit() for ch in (body or ""))
-    punct = sum(unicodedata.category(ch).startswith("P") for ch in (body or ""))
-    diagnostic = diagnostics.calculate(
-        body or "", rare_ratio=rare_token_ratio, digit_ratio=digits / max(1, chars),
-        mean_token_chars=mean_token_chars, mean_idf=mean_idf,
-        tokenizer=tokens, splitter=SENTENCES) if diagnostics else {
-        key: None for key in ("vader_compound", "vader_positive", "vader_neutral",
-                               "vader_negative", "sentiment_valence_01",
-                               "sentiment_intensity_01", "reading_grade", "reading_ease",
-                               "reading_difficulty_01", "lexical_cohesion_01",
-                               "contradiction_score")}
-    if not diagnostics:
-        diagnostic.update(sentiment_sample_chars=0, reading_sample_chars=0,
-                          technicality_proxy_01=0.)
-    scalar = [
-        min(1., math.log1p(length) / 14), distinct / total,
-        vocab_coverage, tfidf_coverage, min(1., mean_idf / 10), saliency,
-        title_overlap, normalized_entropy,
-        diagnostic["sentiment_valence_01"] if diagnostic["sentiment_valence_01"] is not None else .5,
-        diagnostic["sentiment_intensity_01"] if diagnostic["sentiment_intensity_01"] is not None else .5,
-        diagnostic["technicality_proxy_01"],
-        diagnostic["lexical_cohesion_01"] if diagnostic["lexical_cohesion_01"] is not None else .5,
-    ]
-    mixed, energy = combined_vector(semantic, lexical, scalar, bekko_embedding)
-    encoded, scales = quantize(mixed)
-    decoded = dequantize(encoded, scales)
-    decoded_length = float(np.linalg.norm(decoded))
-    vector_quant_cosine = (float(np.dot(mixed, decoded)) / decoded_length
-                           if decoded_length > 1e-9 else 1.)
-    fasttext_encoded, fasttext_scales = quantize(
-        norm(semantic) if semantic is not None
-        else np.zeros(FASTTEXT_DIMS, np.float32))
-    bekko_encoded, bekko_scales = quantize(norm(bekko_embedding))
-    result = {
-        "source_file": source_file, "source_ordinal": ordinal, "title": title,
-        "article_url": url, "token_count": length, "distinct_terms": distinct,
-        "vocab_terms": len(known), "tfidf_terms": len(weighted),
-        "char_count": chars, "byte_count": bytes_,
-        "sentence_count": sentences,
-        "mean_sentence_tokens": length / max(1, sentences),
-        "mean_token_chars": mean_token_chars, "lexical_diversity": distinct / total,
-        "hapax_ratio": hapax / max(1, distinct),
-        "stopword_ratio": stop / total,
-        "oov_or_filtered_ratio": 1 - vocab_coverage,
-        "digit_ratio": digits / max(1, chars),
-        "punctuation_ratio": punct / max(1, chars),
-        "repetition_ratio": repetition, "entropy": entropy,
-        "vocab_coverage": vocab_coverage, "tfidf_coverage": tfidf_coverage,
-        "mean_idf": mean_idf, "max_tfidf": top[0][1] if top else 0,
-        "tfidf_l2": l2, "tfidf_top5_share": top5share,
-        "tfidf_entropy": tfidf_entropy,
-        "bm15_sum": bm_sum, "bm15_max": bmweighted[0][1] if bmweighted else 0.,
-        "saliency": saliency, "title_overlap": title_overlap,
-        "lead_relevance": lead_relevance, "representative_sentence": representative,
-        "word_counts_json": compact(known),
-        "tfidf_sparse_json": compact(sparse),
-        "bm15_sparse_json": compact(sorted((idx, round(v, 6)) for idx, v, _ in bmweighted)),
-        "keywords_json": compact([[term, round(v, 6)] for _, v, term in top]),
-        "vector_q8_b64": encoded, "vector_scales_b64": scales,
-        "fasttext_q8_b64": fasttext_encoded, "fasttext_scales_b64": fasttext_scales,
-        "bekko_q8_b64": bekko_encoded, "bekko_scales_b64": bekko_scales,
-        "bekko_input_tokens": bekko_tokens, "bekko_truncated": int(bekko_tokens > 256),
-        "bekko_available": 1,
-        "semantic_available": int(fasttext_vectors is not None),
-        "fasttext_training_tokens": training_tokens,
-        "effective_vocabulary": math.exp(entropy) if length else 0.,
-        "normalized_entropy": normalized_entropy,
-        "simpson_diversity": simpson_diversity,
-        "hapax_token_ratio": hapax / total,
-        "rare_token_ratio": rare_token_ratio,
-        "rare_term_ratio": rare_term_ratio,
-        "mean_term_frequency": length / max(1, distinct),
-        "idf_std": idf_std,
-        "keyword_token_share": keyword_token_share,
-        "keyword_title_overlap": keyword_title_overlap,
-        "title_tfidf_share": title_tfidf_share,
-        "bm15_mean": bm_sum / max(1, len(bmweighted)),
-        "bm15_top5_share": bm15_top5_share,
-        "sentence_length_cv": sentence_length_cv,
-        "extractive_position": extractive_position,
-        "extractive_margin": extractive_margin,
-        "lead_keyword_overlap": lead_keyword_overlap,
-        "vector_quant_cosine": vector_quant_cosine,
-        "vector_active_fraction": float(np.mean(np.abs(mixed) > .01)),
-        "fusion_component_energy_json": compact({key: round(value, 6)
-                                                  for key, value in energy.items()}),
-        "word_counts_all_json": compact(counts), "hapax_count": hapax,
-        "stopword_token_count": stop, "known_token_count": known_tokens,
-        "tfidf_token_count": sum(counts[t] for _, _, t in weighted),
-        "digit_char_count": digits, "punctuation_char_count": punct,
-        "tfidf_raw_sum": tfidf_sum, "bm15_raw_sum": bm_sum,
-        **diagnostic,
-    }
-    return result
+            weighted[term] = (1 + math.log(n)) * value_idf
+            bm[term] = bm_idf(docs, df) * n * (K1 + 1) / (
+                n + K1 * (1 - B + B * length / max(1, avglen)))
+    l2 = math.sqrt(sum(v * v for v in weighted.values()))
+    mass = sum(weighted.values())
+    top = sorted(weighted.items(), key=lambda pair: (-pair[1], pair[0]))[:16]
+    known_count = sum(known.values())
+    mean_idf = sum(vocabulary_lookup[t][2] * n for t, n in known.items()) / max(1, known_count)
+    title_terms = set(tokens(title))
+    # Include all article terms, including terms outside the TF-IDF shortlist.
+    vector = np.zeros(FASTTEXT_DIMS, dtype=np.float32)
+    if model is not None and length:
+        vector = norm(np.asarray(model.get_sentence_vector(" ".join(tokens(body))), dtype=np.float32))
+    return dict(
+        title=title, article_url=url, char_count=chars, sentence_count=sentences,
+        distinct_terms=distinct, mean_sentence_tokens=length / max(1, sentences),
+        mean_token_chars=sum(len(t) * n for t, n in counts.items()) / total,
+        lexical_diversity=distinct / total,
+        hapax_ratio=sum(n == 1 for n in counts.values()) / max(1, distinct),
+        stopword_ratio=sum(n for t, n in counts.items() if t in stopwords) / total,
+        digit_ratio=sum(c.isdigit() for c in body) / max(1, chars),
+        punctuation_ratio=sum(unicodedata.category(c).startswith("P") for c in body) / max(1, chars),
+        repetition_ratio=max(counts.values(), default=0) / total, entropy=entropy,
+        normalized_entropy=entropy / math.log(distinct) if distinct > 1 else 0.,
+        simpson_diversity=1 - sum((n / total) ** 2 for n in counts.values()) if length else 0.,
+        vocab_coverage=known_count / total,
+        tfidf_coverage=sum(counts[t] for t in weighted) / total,
+        mean_idf=mean_idf,
+        idf_std=math.sqrt(sum(n * (vocabulary_lookup[t][2] - mean_idf) ** 2
+                               for t, n in known.items()) / max(1, known_count)),
+        tfidf_l2=l2, tfidf_top5_share=sum(v for _, v in top[:5]) / mass if mass else 0.,
+        tfidf_entropy=-sum(v / mass * math.log(v / mass) for v in weighted.values()) if mass else 0.,
+        title_overlap=len(title_terms & known.keys()) / max(1, len(title_terms)),
+        word_counts=compact(counts),
+        tfidf=compact({t: v / l2 for t, v in weighted.items()}) if l2 else "{}",
+        bm25=compact(bm), keywords=compact(dict(top)),
+        fasttext=compact(vector.tolist()) if model is not None else None,
+        bekko=compact(norm(bekko_embedding).tolist()),
+        bekko_input_tokens=bekko_tokens, bekko_truncated=int(bekko_tokens > 256))
 
 
 def sha256(path: Path) -> str:
@@ -598,21 +326,17 @@ def compress(source: Path, destination: Path):
         with source.open("rb") as inp, destination.open("wb") as out:
             zstd.ZstdCompressor(level=3, threads=2).copy_stream(inp, out)
     except ImportError as exc:
-        raise RuntimeError("zstandard is required to package SQLite and fastText models") from exc
+        raise RuntimeError("zstandard is required to package fastText models") from exc
 
 
 def build(files: list[Path], output: Path, code: str, *,
           vocab_size: int = VOCAB_SIZE, shortlist: int = TFIDF_SIZE,
-          max_train_tokens: int = 2_000_000, sample_mod: int = 4,
-          timeout: int = 180, fts5: bool = True,
-          allow_lexical_only: bool = False, threads: int = 2,
+          timeout: int = 0, threads: int = 2,
           bekko: bool = True) -> dict:
-    if not files or any(not p.is_file() or not p.name.endswith(".txt.gz") for p in files):
+    if not files or any(not p.is_file() or not p.name.endswith((".txt.gz", ".txt.xz")) for p in files):
         raise ValueError("Provide existing .txt.gz archives")
     if not 1 <= shortlist <= vocab_size <= 50_000:
         raise ValueError("Require 1 <= tfidf size <= vocab size <= 50000")
-    if not 1 <= sample_mod <= 100 or max_train_tokens < 100:
-        raise ValueError("Invalid training sample settings")
     if not re.fullmatch(r"[a-z0-9_-]+", code):
         raise ValueError("Expected a Wikimedia language code")
     output.mkdir(parents=True, exist_ok=True)
@@ -621,9 +345,11 @@ def build(files: list[Path], output: Path, code: str, *,
         database = stage / "articles.sqlite"
         training = stage / "fasttext-training.txt"
         model_path = stage / "fasttext.bin"
-        db = open_database(database, fts5)
+        db = open_database(database)
         try:
-            totals = ingest(sorted(files), db, training, code, fts5, max_train_tokens, sample_mod)
+            text_path = stage / "articles.txt.xz"
+            totals = ingest(sorted(files), db, training, code,
+                            text_output=text_path)
             entries = vocabulary(db, totals["articles"], code, vocab_size, shortlist)
             lookup = {term: (index, df, value_idf, enabled)
                       for index, term, _, df, value_idf, enabled in entries}
@@ -632,9 +358,7 @@ def build(files: list[Path], output: Path, code: str, *,
                     "SELECT term FROM terms WHERE df > ?", (totals["articles"] * .80,)))
             model, reason = train_fasttext(training, model_path, totals["train_tokens"],
                                            timeout=timeout, threads=threads,
-                                           allow_lexical_only=allow_lexical_only)
-            vectors = (np.stack([model.get_word_vector(term) for _, term, *_ in entries])
-                       .astype(np.float32) if model is not None and entries else None)
+                                           allow_lexical_only=False)
             avglen = totals["tokens"] / totals["articles"]
             if not bekko:
                 raise ValueError("Bekko is required for complete semantic features")
@@ -646,14 +370,11 @@ def build(files: list[Path], output: Path, code: str, *,
                 from bekko_features import BekkoEncoder, embedding_input
             encoder = BekkoEncoder()  # Load exactly once per language.
             try:
-                from scripts.article_diagnostics import Diagnostics
                 from scripts.article_parquet import ArticleParquet, CorpusProfile
             except ModuleNotFoundError as exc:
                 if exc.name != "scripts":
                     raise
-                from article_diagnostics import Diagnostics
                 from article_parquet import ArticleParquet, CorpusProfile
-            diagnostics = Diagnostics(code)
             profile = CorpusProfile()
             article_path = stage / "articles.parquet"
             parquet = ArticleParquet(article_path, CSV_FIELDS)
@@ -670,17 +391,12 @@ def build(files: list[Path], output: Path, code: str, *,
                     for row, bekko_vector, input_tokens in zip(chunk, embeddings, lengths):
                         result = metrics_for_article(row, lookup, stopwords,
                                                      totals["articles"], avglen,
-                                                     vectors, totals["train_tokens"],
-                                                     bekko_vector, input_tokens, diagnostics)
+                                                     model, bekko_vector, input_tokens)
                         if set(result) != set(CSV_FIELDS):
                             raise RuntimeError("Article-feature schema mismatch")
-                        mixed_vec = dequantize(result["vector_q8_b64"],
-                                               result["vector_scales_b64"])
-                        parquet.add(row[5], result, mixed_vec)
-                        profile.add(result, mixed_vec)
-                        db.execute("INSERT INTO metrics VALUES (?,?)",
-                                   (row[0], compact({key: val for key, val in result.items()
-                                                    if key != "word_counts_all_json"})))
+                        parquet.add(row[5], result)
+                        profile.add(result)
+                    print(f"Embedded {parquet.count}/{totals['articles']} articles", flush=True)
             finally:
                 parquet.close()
             if parquet.count != totals["articles"]:
@@ -688,14 +404,12 @@ def build(files: list[Path], output: Path, code: str, *,
             profile_path = stage / "corpus-profile.json"
             profile_path.write_text(json.dumps(profile.export(), ensure_ascii=False,
                                                separators=(",", ":")) + "\n", encoding="utf-8")
-            if fts5:
-                db.execute("INSERT INTO article_fts(article_fts) VALUES('rebuild')")
-                db.execute("INSERT INTO article_fts(article_fts) VALUES('integrity-check')")
-            db.commit()
-            if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
-                raise RuntimeError("SQLite integrity check failed")
-            if db.execute("SELECT count(*) FROM metrics").fetchone()[0] != totals["articles"]:
-                raise RuntimeError("Feature row-count mismatch")
+            # Full corpus TF/DF/IDF, streamed without a vocabulary cap.
+            full_words = stage / "words.jsonl.gz"
+            with gzip.open(full_words, "wt", encoding="utf-8") as out:
+                for term, tf, df in db.execute("SELECT term,tf,df FROM terms ORDER BY term"):
+                    out.write(compact(dict(term=term, tf=tf, df=df,
+                                           idf=idf(totals["articles"], df))) + "\n")
             db.close()
             words_path = stage / "vocabulary.json.gz"
             with gzip.open(words_path, "wt", encoding="utf-8", compresslevel=6) as out:
@@ -707,9 +421,7 @@ def build(files: list[Path], output: Path, code: str, *,
                                       "idf": idfval, "tfidf": bool(active)}
                                      for idx, term, tf, df, idfval, active in entries]},
                           out, ensure_ascii=False, separators=(",", ":"))
-            packaged = stage / "articles.sqlite.zst"
-            compress(database, packaged)
-            artifacts = [article_path, profile_path, words_path, packaged]
+            artifacts = [article_path, text_path, profile_path, words_path, full_words]
             if model is not None:
                 model = None
                 compressed_model = stage / "fasttext.bin.zst"
@@ -721,37 +433,17 @@ def build(files: list[Path], output: Path, code: str, *,
                 "average_document_tokens": avglen,
                 "raw_vocabulary": totals["raw_vocabulary"],
                 "vocabulary_size": len(entries), "tfidf_size": sum(entry[5] for entry in entries),
-                "fasttext": {"available": vectors is not None, "reason": reason,
+                "fasttext": {"available": model_path.exists(), "reason": reason,
                              "dim": FASTTEXT_DIMS, "algorithm": "cbow",
                              "epoch": 1, "subword_bucket": 30000,
                              "training_tokens": totals["train_tokens"],
-                             "sample_mod": sample_mod, "train_token_cap": max_train_tokens,
-                             "timeout_seconds": timeout},
+                             "training": "all tokens in every article",
+                             "timeout_seconds": timeout or None},
                 "bekko": {"model": "hotchpotch/bekko-embedding-v1-a8m",
                           "backend": "openvino", "device": "cpu", "dimensions": 128,
                           "max_input_tokens": 256, "batch_size": 16,
                           "input": "NFKC+casefold title and bounded lead excerpt",
                           "required": True},
-                "vector": {"dimensions": DENSE_DIMS,
-                           "components": {"bekko": 128, "fasttext_projected": 44,
-                                          "signed_tfidf_hash": 16, "document_metrics": 12},
-                           "importance": FUSION_IMPORTANCE,
-                           "weighting": "sqrt(importance) per individually L2-normalized subspace",
-                           "projection_seed": 2026,
-                           "centered_metrics": True,
-                           "quantization": "symmetric_int8_per_32_float16_scale",
-                           "byte_order": "little",
-                           "column": "vector_q8_b64", "scales": "vector_scales_b64",
-                           "metric_fields": ["log_length", "lexical_diversity", "vocab_coverage",
-                             "tfidf_coverage", "mean_idf", "saliency", "title_overlap",
-                             "normalized_entropy", "sentiment_valence_01",
-                             "sentiment_intensity_01", "technicality_proxy_01",
-                             "lexical_cohesion_01"]},
-                "diagnostics": {"sentiment": "English VADER, first 3072 + last 1024 chars",
-                                "readability": "English Flesch-Kincaid, first 2048 chars",
-                                "lexical_cohesion": "adjacent sentence Jaccard, first 12000 chars",
-                                "contradiction": "not computed; requires NLI",
-                                "technicality": "heuristic ratio, not calibrated"},
                 "primary_table": "articles.parquet",
                 "corpus_profile": "corpus-profile.json",
                 "lexical": {"normalization": "NFKC+casefold+common_quote_dash_fold",
@@ -759,8 +451,8 @@ def build(files: list[Path], output: Path, code: str, *,
                             "stopwords": "stopwordsiso (if installed) + English defaults + high-df filtering",
                             "idf": "ln((N+1)/(df+1))+1",
                             "bm15": {"k1": K1, "b": B},
-                            "fts5": fts5,
-                            "word_counts": "full counts stored as zlib JSON per article in SQLite; 10K projected counts in CSV"},
+
+                            "word_counts": "full counts per article; full corpus TF/DF/IDF in words.jsonl.gz"},
                 "files": {},
             }
             for file in artifacts:
@@ -784,12 +476,8 @@ def main():
     p.add_argument("--language", default="en")
     p.add_argument("--vocab", type=int, default=VOCAB_SIZE)
     p.add_argument("--tfidf", type=int, default=TFIDF_SIZE)
-    p.add_argument("--train-token-cap", type=int, default=2_000_000)
-    p.add_argument("--sample-mod", type=int, default=4)
-    p.add_argument("--fasttext-timeout", type=int, default=180)
+    p.add_argument("--fasttext-timeout", type=int, default=0)
     p.add_argument("--threads", type=int, default=2)
-    p.add_argument("--no-fts5", action="store_true")
-    p.add_argument("--allow-lexical-only", action="store_true")
     p.add_argument("--no-bekko", action="store_true",
                    help="Disable Bekko (incomplete release; rejected by full builder)")
     args = p.parse_args()
@@ -800,9 +488,7 @@ def main():
     if not args.sources:
         p.error("At least one source .txt.gz required")
     report = build(args.sources, args.output, args.language, vocab_size=args.vocab,
-                   shortlist=args.tfidf, max_train_tokens=args.train_token_cap,
-                   sample_mod=args.sample_mod, timeout=args.fasttext_timeout,
-                   fts5=not args.no_fts5, allow_lexical_only=args.allow_lexical_only,
+                   shortlist=args.tfidf, timeout=args.fasttext_timeout,
                    threads=args.threads, bekko=not args.no_bekko)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 

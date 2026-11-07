@@ -118,3 +118,30 @@ class ZenodoResumeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class CompleteBundleZenodoTests(unittest.TestCase):
+    def test_local_bundle_uploads_only_declared_files_and_requires_checksums(self):
+        from scripts.release_parquet import sha256
+        with tempfile.TemporaryDirectory() as tmp:
+            folder=Path(tmp)
+            names=['articles.parquet','articles.txt.xz','features.zip','models.zip','manifest.json']
+            assets=[]
+            for name in names:
+                path=folder/name; path.write_bytes(name.encode())
+                assets.append(Asset(name,sha256(path),path.stat().st_size))
+            title='Plaintext Wikipedia (french) — Parquet edition'
+            draft={'id':123,'submitted':False,'metadata':{'title':title},'files':[],
+                   'links':{'bucket':'https://zenodo.org/api/files/bundle',
+                            'publish':'https://zenodo.org/api/deposit/depositions/123/actions/publish'}}
+            uploaded=[]
+            def put(url,**kwargs):
+                if '/api/files/' not in url:
+                    return SimpleNamespace(raise_for_status=lambda:None,json=lambda:draft)
+                data=kwargs['data'].read();uploaded.append(url.rsplit('/',1)[1])
+                return SimpleNamespace(content=b'ok',raise_for_status=lambda:None,
+                                       json=lambda:{'checksum':'md5:'+hashlib.md5(data).hexdigest()})
+            with patch.dict(os.environ,{'ZENODO_TOKEN':'fake'}), patch('requests.get',return_value=SimpleNamespace(raise_for_status=lambda:None,json=lambda:draft)), patch('requests.put',side_effect=put), patch('requests.post',return_value=SimpleNamespace(raise_for_status=lambda:None,json=lambda:{})) as publish:
+                zenodo_publish(None,'ffatty/plaintext-wikipedia-full-french',assets,
+                               {'language':'french','source_url':'https://example.org','links':{}},123,local_folder=folder)
+                self.assertEqual(set(uploaded),set(names))
+                publish.assert_called_once()

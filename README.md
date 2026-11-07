@@ -1,30 +1,14 @@
 # PlainTextWikipedia
 
-Convert official Wikimedia dumps into independently compressed, UTF-8 plaintext article archives. This maintained fork automates multilingual builds and publishes the output to **Hugging Face** and **Kaggle**, with curated Parquet-only research archives prepared for **Zenodo**.
+Build multilingual Wikipedia corpora through one shared GitHub Actions pipeline.
+Each language produces one article-row Parquet, one combined `txt.xz`, full corpus
+word statistics and independent fastText/Bekko features. The identical verified
+bundle is delivered to Hugging Face, Kaggle and Zenodo.
 
-
-## Per-language lexical and semantic article features
-
-An optional [corpus features workflow](docs/article-features.md) builds a
-separate article-metrics CSV, 10K vocabulary/5K TF-IDF term statistics,
-a compressed SQLite/FTS5 index and a tiny per-language fastText model.
-Each article also gets a **quantized 200D vector** (160 fastText + 32
-TF-IDF hashing + 8 numeric features), plus its underlying word counts,
-sparse TF-IDF/BM15 scores, keywords and extractive metrics.
-Original article files are unchanged. The feature workflow is manual and
-has explicit disk, training and retry limits.
-
-## Original plaintext + Parquet editions
-
-Existing published plaintext shards are also available as **Zstandard-compressed Parquet** for training and analytics. Each language keeps its original gzip archives and adds Parquet to the **same existing dataset**; no Wikimedia XML reconversion is required. Parquet exports preserve source SHA-256 provenance, with one row per article and inexpensive text metrics (`char_count`, `byte_count`, `word_count`) plus a best-effort `article_url`. Article images require a separate API-backed enrichment pass and are not included. Legacy SQLite files, where already published, are not regenerated. See [structured exports and GitHub Actions usage](docs/structured-exports.md) for examples, costs, coverage caveats, and publishing behavior.
-
-**Publishing:** Run [all languages](.github/workflows/structured-fleet.yml)
-(one queued, bounded-concurrency workflow) or
-[one language](.github/workflows/structured-wikipedia.yml)
-(the same reusable publisher). No redundant XML rebuilds, intermediate
-GitHub Actions artifacts or full Kaggle downloads for unchanged versions.
-
-**Release controls:** [3-destination runbook](docs/release-runbook.md) — offline regression tests, read-only credential checks, resumable multilingual exports, safe Kaggle versioning, and manual-only Zenodo DOI publication. When you manually start the full-fleet release, all three destinations publish by default; you can explicitly disable Kaggle or Zenodo. No full-fleet release starts automatically on merge.
+See [the output contract and limitations](docs/article-features.md).
+[One-language build](.github/workflows/article-features-one.yml) and
+[fleet build](.github/workflows/article-features-fleet.yml) are manual;
+publication defaults to **off**. XML rebuilds use the same final builder.
 
 ## Published datasets and destinations
 

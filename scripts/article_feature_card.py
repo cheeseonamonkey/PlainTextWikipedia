@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import yaml
 
-CANONICAL_NOTE = "<!-- canonical-article-features-v5 -->"
+CANONICAL_NOTE = "<!-- canonical-article-features-v6 -->"
 
 
 def update_card(content: str) -> str:
@@ -23,16 +23,9 @@ def update_card(content: str) -> str:
     metadata["configs"] = canonical
     body = sections[2]
     if CANONICAL_NOTE not in body:
-        body += ("\n## Canonical article table\n\n"
-                 f"{CANONICAL_NOTE}\n"
-                 "The default `train` split loads **`articles.parquet`**, one row per "
-                 "article with original text, full lexical/semantic features, "
-                 "sentiment/readability diagnostics where supported and a 200D "
-                 "combined embedding. Source gzip and structured shards remain "
-                 "available under `data/` and `structured/`, but are not silently "
-                 "mixed into the default analytical dataset. Corpus-level "
-                 "vocabulary, descriptive statistics, model and searchable SQLite "
-                 "sidecar are under `features/`.\n"
-                 "The feature schema and known limitations are documented in "
-                 "[the repository](https://github.com/cheeseonamonkey/PlainTextWikipedia/blob/main/docs/article-features.md).\n")
+        body += ("\n## Article schema\n\n" + CANONICAL_NOTE + "\n"
+                 "One row per article. Independent Bekko and fastText embeddings, full word counts, "
+                 "TF-IDF and BM25 dictionaries, and compact document metrics. "
+                 "Corpus statistics and full word TF/DF/IDF are in `features.zip`; "
+                 "the fastText model is in `models.zip`.\n")
     return "---\n" + yaml.safe_dump(metadata, sort_keys=False, allow_unicode=True) + "---\n" + body

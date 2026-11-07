@@ -58,6 +58,29 @@ def inventory(api: HfApi, repo: str) -> tuple[list[Asset], dict]:
     raw = sorted(f for f in files if re.fullmatch(r"data/[^/]+\.txt\.gz", f))
     if not raw:
         raise ValueError("Dataset has no published plaintext source archives")
+    if "articles.parquet" in files and "features/manifest.json" in files:
+        manifest = json.loads(Path(hf_hub_download(
+            repo_id=repo, filename="features/manifest.json", repo_type="dataset",
+            token=api.token)).read_text(encoding="utf-8"))
+        declared = {item["path"]: item["sha256"] for item in manifest.get("source_archives", [])}
+        if set(declared) != set(raw) or any(not lfs_sha(files[p]) or lfs_sha(files[p]) != declared[p] for p in raw):
+            raise ValueError("Feature table does not match current source archives")
+        meta = manifest.get("files", {}).get("articles.parquet", {})
+        parquet = files["articles.parquet"]
+        if (manifest.get("primary_table") != "articles.parquet" or not manifest.get("documents")
+                or not re.fullmatch(r"[0-9a-f]{64}", meta.get("sha256", ""))
+                or int(parquet.size) != meta.get("bytes")
+                or (lfs_sha(parquet) and lfs_sha(parquet) != meta["sha256"])):
+            raise ValueError("Invalid canonical feature Parquet")
+        return [Asset("articles.parquet", meta["sha256"], int(meta["bytes"]))], {
+            "version": 2, "source_repo": repo,
+            "source_url": f"https://huggingface.co/datasets/{repo}",
+            "kaggle_url": f"https://www.kaggle.com/datasets/{repo}",
+            "project_url": SOURCE, "original_converter": UPSTREAM,
+            "language": slug, "formats": ["parquet"],
+            "documents": manifest["documents"], "files": [meta],
+            "license": "CC BY-SA 4.0 (consult Wikimedia reuse requirements)",
+        }
     assets = []
     details = []
     for source in raw:
@@ -159,7 +182,7 @@ def list_matching_depositions(requests, url: str, headers: dict, title: str) -> 
 
 
 def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
-                   record_id: int | None):
+                   record_id: int | None, *, local_folder: Path | None = None):
     import requests
 
     token = os.getenv("ZENODO_TOKEN")
@@ -188,6 +211,11 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
             "keywords": ["wikipedia", "corpus", "parquet", "multilingual", "plain text"],
         }
     }
+    if local_folder is not None:
+        payload["metadata"]["description"] = (
+            "<p>Complete Wikipedia article Parquet, combined plaintext, features and models. "
+            "Identical data bundle on all three publishers. Text: Wikimedia contributors, CC BY-SA 4.0.</p>" +
+            "".join(f'<p>{key}: {value}</p>' for key, value in metadata["links"].items()))
     if record_id is None:
         matches = list_matching_depositions(requests, url, headers, title)
         if len(matches) > 1:
@@ -207,6 +235,16 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
 
     if prior and prior.get("submitted") and prior.get("metadata", {}).get("notes") == (
             f"wikidata-parquet-manifest-sha256:{fingerprint}"):
+        if local_folder is not None:
+            remote = {f["filename"]: f for f in prior.get("files", [])}
+            if set(remote) != {Path(a.path).name for a in assets}:
+                raise ValueError("Published Zenodo file set differs from the bundle")
+            for asset in assets:
+                item = remote[Path(asset.path).name]
+                with (local_folder / asset.path).open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "md5").hexdigest()
+                if int(item.get("filesize", -1)) != asset.size or str(item.get("checksum", "")).removeprefix("md5:") != digest:
+                    raise ValueError("Published Zenodo checksum mismatch")
         print(f"SKIP Zenodo: published edition is current ({record_id})", flush=True)
         return
 
@@ -234,11 +272,13 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
     publish_url = draft["links"]["publish"]
     if not bucket.startswith("https://zenodo.org/api/files/") or not publish_url.startswith(url + "/"):
         raise RuntimeError("Unexpected Zenodo upload/publish endpoint")
-    print(f"Zenodo draft {draft['id']} created: uploading verified Parquet only", flush=True)
+    print(f"Zenodo draft {draft['id']} ready: uploading verified release files", flush=True)
     # Preserve completed draft uploads across retries. Older published versions
     # can also carry unchanged Parquet files into the new draft.
     old_files = {file["filename"]: file for file in draft.get("files", [])}
-    wanted = {Path(asset.path).name for asset in assets} | {"provenance.json"}
+    wanted = {Path(asset.path).name for asset in assets}
+    if local_folder is None:
+        wanted.add("provenance.json")
 
     def remote_matches(filename: str, size: int, md5: str) -> bool:
         prior_file = old_files.get(filename)
@@ -277,7 +317,7 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
         response.raise_for_status()
         actual = response.json() if response.content else {}
         remote_md5 = str(actual.get("checksum", "")).removeprefix("md5:")
-        if remote_md5 and remote_md5.lower() != md5:
+        if (local_folder is not None or remote_md5) and remote_md5.lower() != md5:
             raise ValueError(f"Zenodo returned a checksum mismatch for {file.name}")
 
     with tempfile.TemporaryDirectory(prefix="wiki-zenodo-") as tmp:
@@ -290,10 +330,13 @@ def zenodo_publish(api: HfApi, repo: str, assets: list[Asset], metadata: dict,
                 # identity. Do not download the Parquet just to hash it again.
                 print(f"REUSED Zenodo draft from manifest: {asset.path}", flush=True)
                 continue
-            source = fetch_verified(api, repo, asset)
+            source = local_folder / asset.path if local_folder else fetch_verified(api, repo, asset)
+            if local_folder and (source.stat().st_size != asset.size or sha256(source) != asset.sha256):
+                raise ValueError(f"checksum mismatch before Zenodo upload: {asset.path}")
             upload_verified(source, 7200, asset.md5)
             print(f"Processed {index}/{len(assets)}: {asset.path}", flush=True)
-        upload_verified(info, 300)
+        if local_folder is None:
+            upload_verified(info, 300)
     published = requests.post(publish_url, headers=headers, timeout=90)
     published.raise_for_status()
     doc = published.json()
@@ -321,4 +364,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit("Retired publishing entrypoint. Use python -m scripts.wikipedia_bundle; build-only is the default.")

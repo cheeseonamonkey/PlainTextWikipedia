@@ -3,13 +3,11 @@ name: Validate release workflow YAML and expressions
 on:
   push:
     paths:
-      - .github/workflows/structured-fleet.yml
-      - .github/workflows/structured-wikipedia.yml
+      - .github/workflows/**
       - .github/workflows/validate-release-workflows.yml
   pull_request:
     paths:
-      - .github/workflows/structured-fleet.yml
-      - .github/workflows/structured-wikipedia.yml
+      - .github/workflows/**
       - .github/workflows/validate-release-workflows.yml
 
 permissions:
@@ -30,7 +28,4 @@ jobs:
             -o "$RUNNER_TEMP/actionlint.tar.gz"
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
           tar xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint" -color \
-            .github/workflows/structured-fleet.yml \
-            .github/workflows/structured-wikipedia.yml \
-            .github/workflows/validate-release-workflows.yml
+          "$RUNNER_TEMP/actionlint" -color

@@ -1,27 +1,13 @@
-name: Publish one Wikipedia article-feature dataset
-
+name: Build complete Wikipedia bundle
 on:
   workflow_dispatch:
     inputs:
       repo_id:
-        description: Existing Hugging Face Wikipedia dataset (ffatty/...)
+        description: Existing Wikipedia dataset repository
         type: string
         required: true
-        default: ffatty/plain-text-wikipedia-simpleenglish
       publish:
-        description: Publish to existing Hugging Face dataset
-        type: boolean
-        default: true
-      mirror_kaggle:
-        description: Version the existing Kaggle dataset after Hugging Face succeeds
-        type: boolean
-        default: true
-      fts5:
-        description: Build optional SQLite FTS5 full-text search index
-        type: boolean
-        default: true
-      allow_lexical_only:
-        description: Diagnostic only; refuse missing fastText by default
+        description: Publish identical complete bundle to ALL three targets
         type: boolean
         default: false
   workflow_call:
@@ -31,82 +17,91 @@ on:
         required: true
       publish:
         type: boolean
-        default: true
-      mirror_kaggle:
-        type: boolean
-        default: true
-      fts5:
-        type: boolean
-        default: true
-      allow_lexical_only:
-        type: boolean
         default: false
+      source_run_id:
+        type: string
+        default: ''
+      language:
+        type: string
+        default: ''
     secrets:
       HF_TOKEN:
         required: true
       KAGGLE_TOKEN:
         required: false
-
+      ZENODO_TOKEN:
+        required: false
 permissions:
   contents: read
-
+  actions: read
 jobs:
-  build:
+  bundle:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     concurrency:
-      group: wiki-features-${{ inputs.repo_id }}
+      group: wikipedia-bundle-${{ inputs.repo_id }}
       cancel-in-progress: false
     env:
-      REPO: ${{ inputs.repo_id }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      WANT_PUBLISH: ${{ inputs.publish }}
-      WANT_FTS: ${{ inputs.fts5 }}
-      ALLOW_LEXICAL: ${{ inputs.allow_lexical_only }}
-      PYTHONUNBUFFERED: "1"
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+      ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+      REPO: ${{ inputs.repo_id }}
+      LANGUAGE: ${{ inputs.language }}
+      PUBLISH: ${{ inputs.publish }}
+      PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Install CPU-only dependencies
+          python-version: '3.12'
+      - name: Install CPU dependencies
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1 regex pyarrow vaderSentiment textstat
-          python -m pip install --disable-pip-version-check --no-cache-dir 'sentence-transformers[openvino]>=5.0' 'transformers>=4.57,<5'
-      - name: Build complete article Parquet and corpus-level data
+          python -m pip install --no-cache-dir huggingface_hub numpy zstandard fasttext-wheel stopwordsiso==0.7.1 regex pyarrow pyyaml kaggle six requests
+          python -m pip install --no-cache-dir 'sentence-transformers[openvino]>=5.0' 'transformers>=5.12'
+      - name: Check all publisher credentials before building
+        if: inputs.publish
+        run: python -m scripts.publish_preflight
+      - name: Collect complete converted source artifacts
+        if: inputs.source_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.source_run_id }}
+          github-token: ${{ github.token }}
+          pattern: full-${{ inputs.language }}-*
+          merge-multiple: true
+          path: sources
+      - name: Validate converted source coverage
+        if: inputs.source_run_id != ''
+        run: |
+          python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          from scripts.inspect_adaptive import inspect
+          reports = [json.loads(p.read_text()) for p in Path('sources').glob('*.manifest.json')]
+          counts = {r['planned_shards'] for r in reports}
+          if len(counts) != 1 or any(r['language'] != os.environ['LANGUAGE'] for r in reports):
+              raise RuntimeError('Missing/inconsistent source manifests')
+          if not inspect(os.environ['LANGUAGE'], counts.pop(), Path('sources'))['complete']:
+              raise RuntimeError('Incomplete edition; nothing will be published')
+          PYCODE
+      - name: Build and verify everything, then optionally publish
         shell: bash
         run: |
           set -euo pipefail
-          args=(--repo "$REPO" --vocab 10000 --tfidf 5000
-                --train-token-cap 2000000 --sample-mod 4
-                --fasttext-timeout 180 --threads 2)
-          if [[ "$WANT_PUBLISH" == true ]]; then args+=(--publish); fi
-          if [[ "$WANT_FTS" != true ]]; then args+=(--no-fts5); fi
-          if [[ "$ALLOW_LEXICAL" == true ]]; then args+=(--allow-lexical-only); fi
-          SECONDS=0
-          trap 'echo "- Feature phase: ${SECONDS}s" >> "$GITHUB_STEP_SUMMARY"' EXIT
-          python scripts/article_features_release.py "${args[@]}"
-
-  kaggle:
-    needs: build
-    if: ${{ needs.build.result == 'success' && inputs.publish && inputs.mirror_kaggle }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    concurrency:
-      group: wiki-feature-kaggle-${{ inputs.repo_id }}
-      cancel-in-progress: false
-    env:
-      REPO: ${{ inputs.repo_id }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
-      PYTHONUNBUFFERED: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+          args=(--repo "$REPO" --output release)
+          if [[ -d sources ]]; then args+=(--sources sources); fi
+          if [[ "$PUBLISH" == true ]]; then args+=(--publish); fi
+          python -m scripts.wikipedia_bundle "${args[@]}"
+      - name: Name retained bundle
+        if: failure() || !inputs.publish
+        id: artifact
+        run: echo "name=${REPO##*/}" >> "$GITHUB_OUTPUT"
+      - name: Retain verified bundle for inspection
+        if: failure() || !inputs.publish
+        uses: actions/upload-artifact@v4
         with:
-          python-version: "3.12"
-      - run: python -m pip install --disable-pip-version-check --no-cache-dir huggingface_hub kaggle six
-      - name: Authenticate existing Kaggle account
-        run: python scripts/kaggle_auth.py --owner ffatty
-      - name: Mirror canonical article Parquet and corpus data into current Kaggle dataset
-        run: python scripts/feature_kaggle.py --repo "$REPO" --max-sqlite-mb 512
+          name: ${{ steps.artifact.outputs.name }}
+          path: release/*
+          compression-level: 0
+          if-no-files-found: warn
+          retention-days: 7

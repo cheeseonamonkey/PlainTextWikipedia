@@ -1,7 +1,6 @@
 """Bounded CPU Bekko encoder for every article; no per-document network calls.
 
-The 128D Matryoshka output is retained independently, and all 128 dimensions
-contribute to the combined 200D per-language article representation.
+The 128D Matryoshka output is retained independently for each article.
 """
 from __future__ import annotations
 

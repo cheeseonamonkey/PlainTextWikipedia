@@ -1,67 +1,36 @@
-name: Publish validated Wikipedia edition
-
+name: Publish rebuilt Wikipedia bundle
 on:
   workflow_call:
     inputs:
+      publish:
+        description: Publish complete bundle to all three targets
+        type: boolean
+        default: false
       language:
         type: string
         required: true
       count:
         type: string
-        required: false
       source_run_id:
         type: string
-        required: false
       hf_repo:
         type: string
-        required: false
       kaggle_dataset:
         type: string
-        required: false
-  workflow_dispatch:
-    inputs:
-      source_run_id:
-        description: Existing rebuild run ID whose shard artifacts are still retained
-        type: string
-        required: true
-      language:
-        description: Wikimedia project, e.g. simplewiki or enwiki
-        type: string
-        required: true
-      hf_repo:
-        description: Optional existing HF dataset override
-        type: string
-      kaggle_dataset:
-        description: Optional existing Kaggle dataset override
-        type: string
-
 permissions:
   contents: read
   actions: read
-
 jobs:
-  publish:
-    outputs:
-      hf_repo: ${{ steps.resolve.outputs.hf_repo }}
-      hf_success: ${{ steps.publisher.outputs.hf_success }}
-      publishers_ok: ${{ steps.publisher.outputs.publishers_ok }}
-    concurrency:
-      group: wikipedia-publish-${{ inputs.language }}
-      cancel-in-progress: false
+  resolve:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    outputs:
+      repo: ${{ steps.resolve.outputs.hf_repo }}
     env:
       LANGUAGE: ${{ inputs.language }}
-      COUNT_HINT: ${{ inputs.count }}
       HF_REPO_INPUT: ${{ inputs.hf_repo }}
       KAGGLE_DATASET_INPUT: ${{ inputs.kaggle_dataset }}
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Resolve language and publishing destinations
         id: resolve
         shell: bash
@@ -101,92 +70,14 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "HF=$hf_id Kaggle=$kaggle_id"
           echo "hf_repo=$hf_id" >> "$GITHUB_OUTPUT"
-      - name: Collect existing shard artifacts (without rebuilding XML)
-        uses: actions/download-artifact@v4
-        with:
-          run-id: ${{ inputs.source_run_id || github.run_id }}
-          github-token: ${{ github.token }}
-          pattern: full-${{ inputs.language }}-*
-          merge-multiple: true
-          path: publish
-      - name: Validate source run and discover expected root count
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PYCODE'
-          import json, os
-          from pathlib import Path
-          reports = [json.loads(p.read_text()) for p in Path("publish").glob("*.manifest.json")]
-          if not reports:
-              raise RuntimeError("No retained shard manifests; source run cannot be resumed")
-          language = os.environ["LANGUAGE"]
-          counts = {r["planned_shards"] for r in reports if r.get("language") == language}
-          if any(r.get("language") != language for r in reports) or len(counts) != 1:
-              raise RuntimeError("Inconsistent source run shard metadata")
-          count = counts.pop()
-          roots = [r.get("root_shard") for r in reports]
-          if not 1 <= count <= 64 or any(not isinstance(root, int) or root < 1 or root > count for root in roots) or len(set(roots)) != len(roots):
-              raise RuntimeError("Invalid or duplicated source root shards")
-          if os.getenv("COUNT_HINT") and int(os.environ["COUNT_HINT"]) != count:
-              raise RuntimeError("Requested shard count differs from retained source run")
-          with open(os.environ["GITHUB_ENV"], "a") as output:
-              print(f"COUNT={count}", file=output)
-          print(f"Retrieved {len(reports)}/{count} root build reports")
-          PYCODE
-      - name: Losslessly repack to shared eight-archive target
-        shell: bash
-        run: |
-          set -euo pipefail
-          . config/datasets.env
-          python scripts/repack_shards.py --directory publish --target "$WIKIPEDIA_SHARD_TARGET" --min-mb 0
-      - name: Inspect exact successful source coverage
-        id: inspect
-        shell: bash
-        run: |
-          set -euo pipefail
-          python scripts/inspect_adaptive.py \
-            --language "$LANGUAGE" --count "$COUNT" \
-            --directory publish --github-output "$GITHUB_OUTPUT" \
-            --github-summary "$GITHUB_STEP_SUMMARY"
-      - name: Publish Hugging Face and Kaggle concurrently
-        id: publisher
-        if: ${{ steps.inspect.outputs.available == 'true' }}
-        continue-on-error: true
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --disable-pip-version-check huggingface_hub kaggle six
-          python -m scripts.publish_wikipedia --directory publish
-      - name: Report empty or corrupt source staging
-        if: ${{ steps.inspect.outputs.available != 'true' }}
-        run: |
-          echo "::error::No valid source shard artifacts were available to publish"
-          exit 1
-
-  zenodo:
-    name: Build verified Parquet and publish Zenodo
-    needs: publish
-    # A Kaggle failure must not suppress Zenodo when the HF source is published.
-    if: ${{ always() && needs.publish.outputs.hf_success == 'true' }}
-    uses: ./.github/workflows/structured-wikipedia.yml
+      - name: Require identical dataset identifiers
+        run: test "$FULL_HF_REPO" = "$FULL_KAGGLE_DATASET"
+  publish:
+    needs: resolve
+    uses: ./.github/workflows/article-features-one.yml
     with:
-      repo_id: ${{ needs.publish.outputs.hf_repo }}
-      mirror_kaggle: false
-      publish_zenodo: true
+      repo_id: ${{ needs.resolve.outputs.repo }}
+      source_run_id: ${{ inputs.source_run_id || github.run_id }}
+      language: ${{ inputs.language }}
+      publish: ${{ inputs.publish }}
     secrets: inherit
-
-  report:
-    name: Require all three publisher outcomes
-    if: always()
-    needs: [publish, zenodo]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report genuine end-to-end release status
-        env:
-          RAW_JOB: ${{ needs.publish.result }}
-          RAW_PUBLISHERS_OK: ${{ needs.publish.outputs.publishers_ok }}
-          ZENODO_JOB: ${{ needs.zenodo.result }}
-        run: |
-          echo "Hugging Face + Kaggle publication: $RAW_PUBLISHERS_OK (job: $RAW_JOB)"
-          echo "Zenodo Parquet publication: $ZENODO_JOB"
-          [[ "$RAW_JOB" == success && "$RAW_PUBLISHERS_OK" == true && "$ZENODO_JOB" == success ]]
