@@ -39,7 +39,7 @@ JSON columns: `word_counts` (all terms), `tfidf` (term → L2-normalized weight)
 Bekko metadata: `bekko_input_tokens`, `bekko_truncated`.
 
 TF-IDF, BM25 and fastText share **one top-10K vocabulary** after NFKC/case
-normalization, stopwordsiso filtering, dependency-backed Snowball stemming and
+normalization, multilingual stopword filtering, dependency-backed Snowball stemming and
 removal of terms appearing in more than half the corpus (except one-document
 corpora). TF/DF counts merge inflected forms within each article before counting
 document frequency. A language without a supported stemmer retains normalized
@@ -73,7 +73,7 @@ clear aggregate definitions; titles and URLs are article-only attributes.
 
 ## Build, then publish
 
-`python -m scripts.wikipedia_bundle --repo ffatty/... --output release` builds
+`python -m scripts.wikipedia_bundle --repo ffatty/plaintext-wikipedia-full-english --output release` builds
 and verifies a local bundle. It never uploads data without `--publish`.
 
 The manual one-language/fleet workflows call this same command. Rebuild workflows
