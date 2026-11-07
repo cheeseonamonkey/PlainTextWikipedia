@@ -26,6 +26,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            REQUIREMENTS.TXT
+            requirements-features.txt
       - run: python -m pip install -r REQUIREMENTS.TXT -r requirements-features.txt
       - name: Compile and sanity-check bundle entrypoint
         run: |
