@@ -48,8 +48,8 @@ class LanguagePipelineTests(unittest.TestCase):
         smoke = labels.index('Sanity-check bundle imports and real CPU Bekko inference')
         build = labels.index('Build and verify everything, then optionally publish')
         self.assertLess(smoke, build)
-        self.assertIn('BekkoEncoder().encode', steps[smoke]['run'])
-        self.assertIn('np.isfinite', steps[smoke]['run'])
+        self.assertIn('make_bundle(', steps[smoke]['run'])
+        self.assertIn('verify_bundle(', steps[smoke]['run'])
         self.assertIn('source', labels[build - 1].lower())
 
     def test_catalog_is_the_only_language_destination_mapping(self):
