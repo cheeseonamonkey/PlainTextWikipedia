@@ -1,4 +1,4 @@
-name: Test converter
+name: Test Wikipedia pipeline
 
 on:
   push:
@@ -10,12 +10,30 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Validate GitHub Actions workflows
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz \
+            -o "$RUNNER_TEMP/actionlint.tar.gz"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum --check
+          tar xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r REQUIREMENTS.TXT pyarrow zstandard huggingface_hub kaggle six requests pyyaml numpy fasttext-wheel stopwordsiso==0.7.1 regex vaderSentiment textstat
-      - run: python -m compileall -q scripts tests
-      - run: python -m unittest discover -s tests -v
+          cache: pip
+          cache-dependency-path: |
+            REQUIREMENTS.TXT
+            requirements-features.txt
+      - run: python -m pip install -r REQUIREMENTS.TXT -r requirements-features.txt
+      - name: Compile and sanity-check bundle entrypoint
+        run: |
+          python -m compileall -q scripts tests
+          python -m scripts.wikipedia_bundle --help >/dev/null
+      - name: Run full regression suite
+        run: python -m unittest discover -s tests -v

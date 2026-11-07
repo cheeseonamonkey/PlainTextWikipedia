@@ -101,6 +101,8 @@ def latest_page_ranges(
             raise RuntimeError(
                 f"Overlapping current dump page ranges: {prev[2]} and {curr[2]}"
             )
+        if curr[0] != prev[1] + 1:
+            raise RuntimeError(f"Gap in current dump page ranges: {prev[2]} and {curr[2]}")
     return valid
 
 

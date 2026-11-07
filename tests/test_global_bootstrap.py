@@ -11,7 +11,6 @@ class GlobalBootstrapTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.entries=json.loads((ROOT/"config/additional-languages.json").read_text())["languages"]
-        cls.workflow=(ROOT/".github/workflows/bootstrap-global-oct15.yml").read_text()
         cls.full_workflow=(ROOT/".github/workflows/rebuild-full.yml").read_text()
 
     def test_all_58_projects_are_configured_once(self):
@@ -24,23 +23,6 @@ class GlobalBootstrapTests(unittest.TestCase):
         self.assertTrue(all(re.fullmatch(r"[a-z][a-z0-9_-]*wiki",p) for p in projects))
         self.assertTrue(all(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*",s) for s in slugs))
 
-    def test_wave_matches_configuration_without_rebuilding_old_editions(self):
-        configured={x["project"] for x in self.entries
-                    if x.get("collection")=="global-expansion-2026-10-15"}
-        listed=set(re.findall(r"^\s+- ([a-z][a-z0-9_-]*wiki)$",
-                               self.workflow,re.MULTILINE))
-        self.assertEqual(listed,configured)
-        self.assertEqual(len(listed),58)
-
-    def test_safe_runner_limits_and_small_wiki_shard_policy(self):
-        self.assertIn("max-parallel: 2",self.workflow)
-        self.assertIn("cancel-in-progress: false",self.workflow)
-        self.assertIn("secrets: inherit",self.workflow)
-        self.assertIn("--max-depth 3", self.full_workflow)
-        self.assertIn("publish-wikipedia.yml", self.full_workflow)
-        publisher = (ROOT / ".github/workflows/publish-wikipedia.yml").read_text()
-        self.assertIn("-m scripts.publish_wikipedia", publisher)
-        self.assertIn('--target "$WIKIPEDIA_SHARD_TARGET"', publisher)
 
 
 if __name__=="__main__":

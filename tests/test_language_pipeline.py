@@ -1,103 +1,59 @@
-"""Contract checks for the single reusable Wikimedia edition pipeline."""
-
-import os
-import subprocess
-import tempfile
+"""All active releases share one build implementation; no automatic publishers."""
 import unittest
 from pathlib import Path
-
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
-WORKFLOWS = ROOT / ".github/workflows"
-
-
+ROOT = Path(__file__).resolve().parents[1]/'.github/workflows'
 def workflow(name):
-    return yaml.load((WORKFLOWS / name).read_text(), Loader=yaml.BaseLoader)
-
+    return yaml.load((ROOT/name).read_text(),Loader=yaml.BaseLoader)
 
 class LanguagePipelineTests(unittest.TestCase):
-    def test_entrypoints_share_one_rebuild(self):
-        for name, language in (
-            ("rebuild-simple.yml", "simplewiki"),
-            ("refresh-simple.yml", "simplewiki"),
-            ("refresh-full-monthly.yml", "enwiki"),
-        ):
-            with self.subTest(workflow=name):
-                data = workflow(name)
-                self.assertEqual(len(data["jobs"]), 1)
-                job = next(iter(data["jobs"].values()))
-                self.assertEqual(job["uses"], "./.github/workflows/rebuild-full.yml")
-                self.assertEqual(job["with"]["language"], language)
-                self.assertEqual(job["secrets"], "inherit")
-        all_languages = workflow("rebuild-languages.yml")
-        self.assertEqual(all_languages["jobs"]["rebuild"]["uses"],
-                         "./.github/workflows/rebuild-full.yml")
-        self.assertEqual(all_languages["jobs"]["rebuild"]["with"]["language"],
-                         "${{ matrix.language }}")
-        self.assertEqual(all_languages["jobs"]["rebuild"]["strategy"]["fail-fast"], "false")
-        from scripts.plan_wikipedia_languages import languages
-        self.assertEqual(languages("simplewiki,enwiki"), ["simplewiki", "enwiki"])
-        self.assertEqual(languages("simple,en"), ["simplewiki", "enwiki"])
-        self.assertGreaterEqual(len(languages()), 210)
-        self.assertEqual(len(languages()), len(set(languages())))
+    def test_one_language_builder_for_fleet_and_rebuilds(self):
+        fleet=workflow('article-features-fleet.yml')
+        rebuilt=workflow('publish-wikipedia.yml')
+        for job in (fleet['jobs']['build'], rebuilt['jobs']['publish']):
+            self.assertEqual(job['uses'],'./.github/workflows/article-features-one.yml')
+        single=workflow('article-features-one.yml')
+        self.assertEqual(single['on']['workflow_dispatch']['inputs']['publish']['default'],'false')
+        self.assertEqual(single['on']['workflow_dispatch']['inputs']['repo_id']['default'],
+                         'ffatty/plaintext-wikipedia-full-english')
+        self.assertEqual(single['on']['workflow_call']['inputs']['publish']['default'],'false')
+        self.assertNotIn('mirror_kaggle',str(single))
+        script=str(single['jobs']['bundle']['steps'])
+        self.assertIn('-m scripts.wikipedia_bundle',script)
+        self.assertNotIn('--max-mb',script)
+        self.assertIn('needs.build.result',workflow('rebuild-full.yml')['jobs']['publish']['if'])
 
-    def test_uniform_sharding_and_recursive_recovery(self):
-        data = workflow("rebuild-full.yml")["jobs"]
-        script = next(step["run"] for step in data["plan"]["steps"]
-                      if step.get("id") == "plan")
-        self.assertIn('max_shards="$WIKIPEDIA_SHARD_TARGET"', script)
-        self.assertNotIn("simplewiki", script)
-        self.assertEqual(data["build"]["strategy"]["max-parallel"], "8")
-        self.assertIn("--max-depth 3", str(data["build"]))
-        self.assertIn("overwrite", str(data["build"]))
-        self.assertEqual(data["publish"]["uses"], "./.github/workflows/publish-wikipedia.yml")
-        self.assertEqual(data["publish"]["secrets"], "inherit")
-        publisher = workflow("publish-wikipedia.yml")
-        self.assertIn("workflow_dispatch", publisher["on"])
-        self.assertIn("workflow_call", publisher["on"])
-        script = str(publisher["jobs"]["publish"]["steps"])
-        self.assertIn('--target "$WIKIPEDIA_SHARD_TARGET"', script)
-        self.assertIn('inputs.source_run_id || github.run_id', script)
-        self.assertIn("-m scripts.publish_wikipedia", script)
-        self.assertEqual(publisher["jobs"]["zenodo"]["uses"],
-                         "./.github/workflows/structured-wikipedia.yml")
-        self.assertEqual(publisher["jobs"]["zenodo"]["with"]["mirror_kaggle"], "false")
-        self.assertEqual(publisher["jobs"]["zenodo"]["with"]["publish_zenodo"], "true")
-        self.assertIn("hf_success == 'true'", publisher["jobs"]["zenodo"]["if"])
-        self.assertEqual(publisher["jobs"]["publish"]["outputs"]["publishers_ok"],
-                         "${{ steps.publisher.outputs.publishers_ok }}")
-        self.assertEqual(publisher["jobs"]["report"]["needs"], ["publish", "zenodo"])
-        self.assertNotIn('!= simplewiki', script)
+    def test_no_automatic_data_mutations_and_no_missing_reusable_workflows(self):
+        for file in ROOT.glob('*.yml'):
+            data=workflow(file.name)
+            if file.name != 'test.yml':
+                self.assertLessEqual(set(data['on']),{'workflow_dispatch','workflow_call'})
+            for job in data['jobs'].values():
+                uses=job.get('uses','')
+                if uses.startswith('./.github/workflows/'):
+                    self.assertTrue((ROOT/Path(uses).name).exists(),uses)
 
-    def test_unlisted_wikipedia_uses_generic_metadata_in_same_pipeline(self):
-        from scripts.language_info import metadata
-        self.assertEqual(metadata("zz_customwiki"), ("zz_custom", "zz-custom"))
-        with self.assertRaises(ValueError):
-            metadata("../badwiki")
+    def test_all_publish_entries_require_explicit_opt_in(self):
+        for file in ROOT.glob('*.yml'):
+            events = workflow(file.name).get('on', {})
+            for trigger in ('workflow_dispatch', 'workflow_call'):
+                settings = (events.get(trigger) or {}).get('inputs', {}).get('publish')
+                if settings is not None:
+                    self.assertEqual(settings.get('default'), 'false', (file.name, trigger))
 
-    def test_destination_resolution_reuses_existing_datasets(self):
-        data = workflow("publish-wikipedia.yml")
-        publish = data["jobs"]["publish"]
-        script = next(step["run"] for step in publish["steps"]
-                      if step.get("name") == "Resolve language and publishing destinations")
-        cases = (
-            ("simplewiki", "ffatty/plain-text-wikipedia-simpleenglish"),
-            ("enwiki", "ffatty/plaintext-wikipedia-full-english"),
-            ("frwiki", "ffatty/plaintext-wikipedia-full-french"),
-        )
-        for language, expected in cases:
-            with self.subTest(language=language), tempfile.TemporaryDirectory() as tmp:
-                env = {**os.environ, "LANGUAGE": language, "HF_REPO_INPUT": "",
-                       "KAGGLE_DATASET_INPUT": "", "GITHUB_ENV": str(Path(tmp) / "env"),
-                       "GITHUB_OUTPUT": str(Path(tmp) / "output")}
-                result = subprocess.run(["bash", "-e", "-c", script], cwd=ROOT,
-                                        env=env, capture_output=True, text=True, check=True)
-                settings = dict(line.split("=", 1) for line in Path(env["GITHUB_ENV"]).read_text().splitlines())
-                self.assertEqual(settings["FULL_HF_REPO"], expected)
-                self.assertEqual(settings["FULL_KAGGLE_DATASET"], expected)
-                self.assertIn(expected, result.stdout)
+    def test_real_model_smoke_precedes_full_bundle_build(self):
+        steps = workflow('article-features-one.yml')['jobs']['bundle']['steps']
+        labels = [step.get('name') for step in steps]
+        smoke = labels.index('Sanity-check bundle imports and real CPU Bekko inference')
+        build = labels.index('Build and verify everything, then optionally publish')
+        self.assertLess(smoke, build)
+        self.assertIn('make_bundle(', steps[smoke]['run'])
+        self.assertIn('verify_bundle(', steps[smoke]['run'])
+        self.assertIn('source', labels[build - 1].lower())
 
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_catalog_is_the_only_language_destination_mapping(self):
+        from scripts.wiki_metadata import project_repo, repository_codes
+        for repo, code in repository_codes().items():
+            self.assertEqual(project_repo(code + 'wiki'), repo)
+        self.assertNotIn('case "$code"', (ROOT/'publish-wikipedia.yml').read_text())

@@ -313,4 +313,7 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
+    if sys.argv[1:2] != ["plan"]:
+        raise SystemExit("Use python -m scripts.wikipedia_bundle for publishing")
     main()

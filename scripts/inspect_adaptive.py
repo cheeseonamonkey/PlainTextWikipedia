@@ -61,7 +61,8 @@ def inspect(language: str, expected: int, directory: Path) -> dict:
         try:
             with gzip.open(file, "rb") as stream:
                 first = stream.read(1)
-                if not first:
+                if not first and not any(leaf.get("file") == file.name and leaf.get("articles") == 0
+                                         for leaf in report.get("successful_leaves", [])):
                     print(f"::warning::Empty gzip article shard {file.name}, excluding")
                     file.unlink()
                     continue

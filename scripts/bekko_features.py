@@ -1,30 +1,22 @@
 """Bounded CPU Bekko encoder for every article; no per-document network calls.
 
-The 128D Matryoshka output is retained independently, and all 128 dimensions
-contribute to the combined 200D per-language article representation.
+The 128D Matryoshka output is retained independently for each article.
 """
 from __future__ import annotations
 
 import numpy as np
 
 MODEL_ID = "hotchpotch/bekko-embedding-v1-a8m"
+MODEL_REVISION = "c721113d59a1d91b447450324f51c4b3332c924a"
 MODEL_DIMS = 128
 MAX_TOKENS = 256
 BATCH_SIZE = 16
 
 
-def embedding_input(title: str, body: str, sentence: str = "") -> str:
-    """Deterministic bounded excerpt. Exact normalization matches word lists."""
-    try:
-        from scripts.article_features import fold
-    except ModuleNotFoundError as exc:
-        if exc.name != "scripts":
-            raise
-        from article_features import fold
-    lead = body[:1100]
-    # A separate salient sentence helps topic coverage when it is not the lead.
-    relevant = sentence[:300] if sentence not in lead else ""
-    return fold(" ".join(part for part in (title, lead, relevant) if part))[:1600]
+def embedding_input(title: str, body: str) -> str:
+    """Keep readable, case-preserving text for the pretrained model."""
+    return f"{title.strip()} {body[:1100].strip()}"[:1600]
+
 
 
 class BekkoEncoder:
@@ -33,6 +25,7 @@ class BekkoEncoder:
 
         self.model = SentenceTransformer(
             MODEL_ID,
+            revision=MODEL_REVISION,
             backend="openvino",
             device="cpu",
             truncate_dim=MODEL_DIMS,

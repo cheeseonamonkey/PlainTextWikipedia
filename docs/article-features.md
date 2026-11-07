@@ -1,135 +1,114 @@
-# Wikipedia article features (schema v5)
+# Complete Wikipedia bundles (schema v7)
 
-Canonical analytical output: **`articles.parquet`**, one file per language, one
-row per article. It contains the original article title and body **plus** all
-per-article features and intermediate measurements. Original source archives
-(`data/*.txt.gz`) and optional per-shard Parquet exports remain untouched.
+One shared implementation handles every language. The Wikimedia code affects
+article URLs, Unicode tokenization and stopword lookup; it does not select a
+separate build or publication path. Chinese uses Wikimedia's `zh` code.
 
-The companion `features/` directory stores only corpus-level artifacts:
+Each language dataset receives these **same five files on all three services**:
 
-| File | Purpose |
+| File | Contents |
 |---|---|
-| `articles.parquet` (dataset root) | Primary article table, full text, counts, metrics, nested 200D embedding, raw standalone vectors and reproducibility data |
-| `features/corpus-profile.json` | Entire-corpus numeric means, population deviations, extrema, sampled p05/p50/p95, combined-vector centroid |
-| `features/vocabulary.json.gz` | Top 10K terms, TF/DF/IDF, flags for selected 5K TF-IDF terms |
-| `features/articles.sqlite.zst` | Optional searchable sidecar: every article, **all word counts**, every term's total TF/DF, vocabulary, metrics, FTS5 |
-| `features/fasttext.bin.zst` | Trained per-language CBOW model with 160 dimensions |
-| `features/manifest.json` | Source and artifact hashes, model configuration and decoding instructions |
+| `articles.parquet` | One row per article; 32 columns; Zstandard-compressed row groups |
+| `articles.txt.xz` | All records combined: title, single-line body, blank line |
+| `features.zip` | Extract into `features/`: corpus profile, vocabulary and full word statistics |
+| `models.zip` | Extract into `models/`: compressed trained fastText model and model configuration |
+| `manifest.json` | Full source provenance, article count, byte sizes, SHA256/MD5, all publisher and repository links |
 
-The Parquet is a single file with multiple row groups, not a single massive
-memory allocation. Read it directly with DuckDB, Polars, pandas or PyArrow.
-The SQLite sidecar is a compressed **actual SQLite database**, more useful
-than a SQL text dump (`.sql.gz`) when restored because indexes and FTS5 are
-preserved. No uncompressed copies are shipped. Corpus coverage may be partial
-if the original published Wikipedia conversion was partial.
+ZIP packaging is identical everywhere because Zenodo cannot store native directories.
+The contained statistics/model files are already compressed, so ZIP uses stored entries.
+No public databases, per-shard Parquets, SQL dumps or fused embeddings are generated.
+One temporary SQLite index supports exact corpus counts during the build and is deleted.
+It stores counts and article metadata, not another full plaintext corpus. The
+embedding pass streams article bodies from the combined `txt.xz` and checks them
+against that index. The temporary training text is deleted once fastText is loaded.
 
-## Per-article columns
+## Article columns
 
-### Original and intermediate data
+Identity/content: `title`, `text`, `article_url`, `char_count`.
 
-- `text`, `title`, `article_url`, `source_file`, `source_ordinal`.
-- All original token counts (`word_counts_all_json`), filtered-vocabulary
-  counts (`word_counts_json`), normalized sparse TF-IDF and BM15 score arrays,
-  top keywords and representative extractive sentence.
-- Token, character, byte, sentence, vocabulary, distinct-word, hapax,
-  stopword, selected-vocabulary, TF-IDF-token, digit and punctuation **counts**;
-  coverage ratios and intermediate TF-IDF/BM15 sums.
-- Original and quantized components: `embedding_200` is a native fixed-length
-  **list of 200 float16 values**. Compact int8 encodings and float16 scale
-  columns for the combined, 128D Bekko and 160D fastText vectors are also
-  preserved. Decode with `scripts.article_features.dequantize`.
+Document metrics: `sentence_count`, `distinct_terms`, `mean_sentence_tokens`,
+`mean_token_chars`, `lexical_diversity`, `hapax_ratio`, `stopword_ratio`,
+`digit_ratio`, `punctuation_ratio`, `repetition_ratio`, `entropy`,
+`normalized_entropy`, `simpson_diversity`, `vocab_coverage`,
+`mean_idf`, `idf_std`, `tfidf_l2`, `tfidf_top5_share`, `tfidf_entropy`, `title_overlap`.
 
-### Lexical and extractive scores
+JSON columns: `word_counts` (all terms), `tfidf` (term → L2-normalized weight),
+`bm25` (term → score), `keywords` (top 16 term → raw TF-IDF),
+`fasttext` (160 floats), `bekko` (128 floats).
 
-- Lexical diversity, normalized/Shannon entropy, Simpson diversity, effective
-  vocabulary, hapax ratios, repetition, rarity, mean term frequency, IDF mean
-  and deviation, frequency/coverage ratios, long-tail and title overlap.
-- TF-IDF L2/max/top-five share/entropy, BM15 sum/mean/max/top-five share,
-  keyword share, saliency, title relevance, lead relevance, extractive sentence
-  position/margin, sentence-length CV and lead keyword overlap.
-- Quantization fidelity (`vector_quant_cosine`), activity rate and realized
-  embedding subspace energies.
+Bekko metadata: `bekko_input_tokens`, `bekko_truncated`.
 
-### Heuristic and model-derived diagnostics
+TF-IDF, BM25 and fastText share **one top-10K vocabulary** after NFKC/case
+normalization, multilingual stopword filtering, dependency-backed Snowball stemming and
+removal of terms appearing in more than half the corpus (except one-document
+corpora). TF/DF counts merge inflected forms within each article before counting
+document frequency. A language without a supported stemmer retains normalized
+surface forms; this is explicit in the exported configuration. No hand-written
+stemming or English-only feature implementation is used.
 
-- `saliency`, `sentiment_valence_01`, `sentiment_intensity_01`,
-  `reading_difficulty_01`, `technicality_proxy_01`, and
-  `lexical_cohesion_01` are bounded in **0–1**; they are *different measures*,
-  not one probability. Avoid comparing their values as if calibrated.
-- VADER: `vader_compound` (−1 to 1), `vader_positive`, `vader_neutral`,
-  `vader_negative`; normalized valence is `(compound + 1)/2`, where **0.5 is
-  neutral**. Takes first 3,072 and last 1,024 characters (or entire shorter
-  article); actual sample length is recorded. **English only**; null otherwise.
-- Readability: raw Flesch-Kincaid grade and Flesch Reading Ease, plus an
-  explicitly heuristic bounded difficulty `min(1, max(0, grade/20))`.
-  Computed on first 2,048 characters; **English only**; null otherwise.
-  Readability formulas are approximations, not evaluations of truth.
-- `technicality_proxy_01`: transparent weighted heuristic of rare vocabulary,
-  word length, IDF and digit density; *not a technical-topic classifier*.
-- `lexical_cohesion_01`: average adjacent-sentence token-set Jaccard in the
-  first 12,000 characters; approximates local topical continuity, **not
-  absence of contradictions**. `contradiction_score` is null until a real NLI
-  model evaluates contradictions. Missing measurements remain null in Parquet,
-  not fabricated zero-confidence scores.
+The article `word_counts` dictionary keeps all raw normalized surface forms,
+including words outside that feature vocabulary. Raw corpus statistics and
+pre-top-K normalized statistics are both exported. Every article is published,
+even if it has no selected terms; its fastText vector is then zero. FastText
+training visits every article and retains only the selected normalized terms,
+with one CBOW epoch and no article-sampling cap.
 
-## 200-dimensional combined representation
+Bekko receives an **original, case-preserving title/lead excerpt**, bounded to
+256 model tokens. It does not receive stemmed text. Its model revision is pinned
+and recorded. Original full text is always retained, and the two embeddings stay
+independent. `tfidf_coverage` was removed because it duplicates `vocab_coverage`
+when both use the same vocabulary.
+VADER, readability, saliency, contradiction and fused-vector features are removed.
 
-The v5 vector includes **all 128D multilingual Bekko**, a deterministic
-44D projection of the separate 160D per-language fastText model, a 16D signed
-TF-IDF hash and 12 normalized scalar metrics. Importance in cosine similarity:
+## Corpus statistics
 
-| Component | Dimensions | Importance |
-|---|---:|---:|
-| Bekko | 128 | 46% |
-| FastText projection | 44 | 43% |
-| Sparse TF-IDF signed hash | 16 | 3% |
-| Metrics (including VADER) | 12 | 8% |
+`features/corpus-profile.json` contains count, mean, population standard deviation,
+min/max and approximate percentiles for numeric article columns, plus independent
+Bekko and fastText centroids. Percentiles use a deterministic 2048-row reservoir.
+`features/words.jsonl.gz` streams every term's corpus frequency, document frequency
+and smoothed IDF without a vocabulary cap. `features/normalized-words.jsonl.gz`
+records stemmed/stopword-filtered TF/DF/IDF before top-K selection.
+`features/vocabulary.json.gz` records the shared selected vocabulary and settings. Corpus counts/embeddings have
+clear aggregate definitions; titles and URLs are article-only attributes.
 
-Each block is L2-normalized and multiplied by the square root of its weight;
-then the complete vector is normalized. Metric fields include length, lexical
-richness, vocabulary/TF-IDF coverage, mean IDF, saliency, title overlap,
-entropy, valence, sentiment intensity, technicality and lexical cohesion.
-Missing model scores are centered at 0.5 only **inside the embedding** and
-remain null in the article table. Weights are design choices, not validated
-against a retrieval benchmark. The original fastText/Bekko vectors and the
-realized block-energy ratios remain available for different weighting.
+## Build, then publish
 
-Bekko: `hotchpotch/bekko-embedding-v1-a8m` with CPU/OpenVINO, NFKC-casefolded
-title and bounded article lead (max 256 model tokens), 16 articles per batch.
-This is *not* a full-text transformer embedding. Entire texts are used for
-TF-IDF, corpus counts and fastText pooling; separate fastText trains one epoch
-on up to 2M sampled tokens. The Bekko 128D representation is approximately
-cross-language compatible. The fastText models and **combined vectors are not
-cross-language aligned**. No silent missing-model fallback is permitted in
-full releases.
+`python -m scripts.wikipedia_bundle --repo ffatty/plaintext-wikipedia-full-english --output release` builds
+and verifies a local bundle. It never uploads data without `--publish`.
 
-Quantization: signed int8 per 32-vector block, float16 scale, fixed seed 2026
-for fastText projection, independent BLAKE2s bits for lexical bucket and sign.
-Different fastText training runs can vary slightly due to stochastic CPU work.
+The manual one-language/fleet workflows call this same command. Rebuild workflows
+convert XML into temporary source shards, require successful source coverage,
+then call the same bundle workflow. Every manual `publish` input defaults to false.
+All automatic publication, recovery and repair workflows have been removed.
+The one-language form defaults to **full English** for the first build-only
+acceptance run. Complete that test before a fleet rollout; no test has been launched.
 
-## Operational behavior
+For `--publish`, all three credentials are required. Zenodo draft metadata is
+reserved before building so every file can contain its actual record link.
+**All data is built and verified before the first data upload**. HF receives one
+commit guarded by its parent revision; Kaggle receives a fresh version with
+`--keep-tabular`; Zenodo receives the same local files. All three targets are attempted, even if an earlier upload fails; the job then
+reports all failures together. Services do not support an atomic cross-service
+transaction, so failed targets may temporarily lag successful ones. Retained bundle artifacts permit retry
+with `--resume --publish`; incomplete remote publication is never labeled complete.
+The one-language workflow accepts `bundle_run_id` to restore a retained bundle
+and resume it on GitHub. A build-only bundle can be published this way without
+recomputing features: only the manifest gets its newly reserved Zenodo link.
+Existing output directories are never overwritten by another build.
 
-The manual [`article-features-fleet.yml`](../.github/workflows/article-features-fleet.yml)
-reads only existing HF source archives, builds once per language and publishes
-in one HF commit. Source hashes, configuration, output sizes and hashes decide
-whether to skip a current dataset. The standard 8-shard release and Parquet
-publisher do **not** run this expensive feature build automatically.
-After successful enrichment on Hugging Face, the feature release can also
-version the **same existing Kaggle dataset**, retaining old files and dataset
-history. Kaggle gets the canonical article Parquet, corpus profile, vocabulary,
-fastText model and manifest. The SQLite sidecar is included only when it fits
-the configured size cap; otherwise it stays on Hugging Face. No new Kaggle
-slugs are created.
+Local verification checks exact file/archive membership, article schema, row
+count, sizes, SHA256 and MD5. HF retries recheck every artifact, including the
+manifest; Kaggle waits for an in-progress version and downloads that specific
+version for verification. ZIP member metadata is fixed, so file timestamps do
+not alter the archive identity.
 
-Large Wikipedia editions may exceed ordinary hosted GitHub runner disk and CPU
-limits. Both the builder and Kaggle mirror refuse insufficient capacity rather
-than silently truncating sources. Zenodo still releases separately as verified
-original Parquet, not as an embedding-feature mirror.
+Source downloads are pinned to an immutable HF revision and their SHA256s checked.
+A missing/incomplete source coverage manifest fails the build; it requires source
+recovery rather than pretending an existing subset is complete. This does not
+independently establish that historical converters retained every eligible article.
 
-For local use:
-
-```bash
-python -m pip install numpy pyarrow zstandard fasttext-wheel regex stopwordsiso==0.7.1 vaderSentiment textstat
-python -m pip install 'sentence-transformers[openvino]>=5.0' 'transformers>=4.57,<5'
-python scripts/article_features.py data/*.txt.gz --language en --output article-features
-```
+No file is omitted for size. API quotas, insufficient disk or the GitHub-hosted
+job time limit produce explicit failures. Large-language capacity and real Bekko
+throughput still need a controlled CI validation before a fleet rollout; small
+local fixtures do not establish that English fits a standard runner. Production
+publishing has not been exercised by this refactor.

@@ -17,6 +17,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import lzma
 import os
 import re
 import shutil
@@ -28,7 +29,8 @@ from typing import Iterator
 
 def records(file: Path) -> Iterator[bytes]:
     """Read the converter's title\\nbody\\n\\n records without changing bytes."""
-    with gzip.open(file, "rb") as stream:
+    opener = lzma.open if file.name.endswith(".txt.xz") else gzip.open
+    with opener(file, "rb") as stream:
         while True:
             title = stream.readline()
             if not title:

@@ -17,37 +17,6 @@ from scripts.structured_fleet import retry, transient_error
 ROOT = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
 
-class ReusableWorkflowTests(unittest.TestCase):
-    def test_fleet_queues_same_canonical_single_language_workflow(self):
-        fleet = yaml.load((ROOT / "structured-fleet.yml").read_text(), Loader=yaml.BaseLoader)
-        single = yaml.load((ROOT / "structured-wikipedia.yml").read_text(),
-                           Loader=yaml.BaseLoader)
-        controller = fleet["jobs"]
-        self.assertEqual(controller["publish"]["uses"],
-                         "./.github/workflows/structured-wikipedia.yml")
-        self.assertEqual(controller["publish"]["secrets"], "inherit")
-        self.assertEqual(controller["publish"]["strategy"]["fail-fast"], "false")
-        self.assertEqual(controller["publish"]["strategy"]["max-parallel"],
-                         "${{ inputs.parallelism }}")
-        self.assertEqual(controller["publish"]["with"]["skip_preflight"], "true")
-        self.assertEqual(set(single["on"]), {"workflow_call", "workflow_dispatch"})
-        self.assertEqual(single["on"]["workflow_call"]["inputs"]["repo_id"]["required"], "true")
-        self.assertEqual(single["on"]["workflow_call"]["inputs"]["skip_preflight"]["default"],
-                         "false")
-        self.assertEqual(controller["publish"]["needs"], ["plan", "credentials"])
-        self.assertEqual(controller["publish"]["if"],
-                         "${{ needs.plan.result == 'success' && needs.credentials.result == 'success' }}")
-        for name in ("structured-fleet.yml", "structured-wikipedia.yml"):
-            self.assertNotIn("upload-artifact", (ROOT / name).read_text())
-
-    def test_all_three_publishers_remain_enabled_by_default(self):
-        for name in ("structured-fleet.yml", "structured-wikipedia.yml"):
-            workflow = yaml.load((ROOT / name).read_text(), Loader=yaml.BaseLoader)
-            form = workflow["on"]["workflow_dispatch"]["inputs"]
-            self.assertEqual(form["mirror_kaggle"]["default"], "true")
-            self.assertEqual(form["publish_zenodo"]["default"], "true")
-
-
 class WikipediaArticleLinksTests(unittest.TestCase):
     def test_catalog_and_primary_repos_have_wikipedia_domains(self):
         import json
