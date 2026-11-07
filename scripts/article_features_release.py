@@ -74,7 +74,15 @@ def is_current(api, repo, source_list, settings, remote):
     files = found.get("files")
     if not isinstance(files, dict) or not files:
         return False
+    required = {"articles.parquet", "corpus-profile.json", "vocabulary.json.gz",
+                "articles.sqlite.zst"}
+    if not settings.get("allow_lexical_only", False):
+        required.add("fasttext.bin.zst")
+    if not required.issubset(files):
+        return False
     for name, meta in files.items():
+        if not isinstance(meta, dict) or not meta.get("sha256") or not isinstance(meta.get("bytes"), int):
+            return False
         target = remote.get(name if name == "articles.parquet" else f"features/{name}")
         if target is None or getattr(target, "size", None) != meta.get("bytes"):
             return False
