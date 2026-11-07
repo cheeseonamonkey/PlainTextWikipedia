@@ -27,7 +27,7 @@ class LanguagePipelineTests(unittest.TestCase):
     def test_no_automatic_data_mutations_and_no_missing_reusable_workflows(self):
         for file in ROOT.glob('*.yml'):
             data=workflow(file.name)
-            if file.name not in ('test.yml','validate-release-workflows.yml'):
+            if file.name != 'test.yml':
                 self.assertLessEqual(set(data['on']),{'workflow_dispatch','workflow_call'})
             for job in data['jobs'].values():
                 uses=job.get('uses','')
