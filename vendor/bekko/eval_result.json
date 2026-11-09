@@ -1,0 +1,274 @@
+{
+  "nano_beir": {
+    "NanoArguAna": {
+      "MNanoArguAna-ar_cosine_ndcg@10": 0.47162246746260905,
+      "MNanoArguAna-de_cosine_ndcg@10": 0.5244815937958666,
+      "MNanoArguAna-en_cosine_ndcg@10": 0.5475096777475938,
+      "MNanoArguAna-es_cosine_ndcg@10": 0.5411130875783072,
+      "MNanoArguAna-fr_cosine_ndcg@10": 0.5375623402603463,
+      "MNanoArguAna-it_cosine_ndcg@10": 0.4868980354304658,
+      "MNanoArguAna-mean_cosine_ndcg@10": 0.5181611256161548,
+      "MNanoArguAna-no_cosine_ndcg@10": 0.5032684329614588,
+      "MNanoArguAna-pt_cosine_ndcg@10": 0.5528641027564912,
+      "MNanoArguAna-sv_cosine_ndcg@10": 0.4981303925522546
+    },
+    "NanoClimateFEVER": {
+      "MNanoClimateFEVER-ar_cosine_ndcg@10": 0.2388814653084799,
+      "MNanoClimateFEVER-de_cosine_ndcg@10": 0.3025568513408033,
+      "MNanoClimateFEVER-en_cosine_ndcg@10": 0.311647506437599,
+      "MNanoClimateFEVER-es_cosine_ndcg@10": 0.38262380913979593,
+      "MNanoClimateFEVER-fr_cosine_ndcg@10": 0.28797316267086626,
+      "MNanoClimateFEVER-it_cosine_ndcg@10": 0.31072100361418853,
+      "MNanoClimateFEVER-mean_cosine_ndcg@10": 0.3121963115000014,
+      "MNanoClimateFEVER-no_cosine_ndcg@10": 0.3128726227431737,
+      "MNanoClimateFEVER-pt_cosine_ndcg@10": 0.3369089366136735,
+      "MNanoClimateFEVER-sv_cosine_ndcg@10": 0.3255814456314322
+    },
+    "NanoClimateFEVER-ja": {
+      "MNanoClimateFEVER-ja-mean_cosine_ndcg@10": 0.3544010279234292,
+      "MNanoClimateFEVER-ja_cosine_ndcg@10": 0.3544010279234292
+    },
+    "NanoDBPedia": {
+      "MNanoDBPedia-ar_cosine_ndcg@10": 0.5101660803076424,
+      "MNanoDBPedia-de_cosine_ndcg@10": 0.5818283059326789,
+      "MNanoDBPedia-en_cosine_ndcg@10": 0.6101598991986595,
+      "MNanoDBPedia-es_cosine_ndcg@10": 0.59454992145433,
+      "MNanoDBPedia-fr_cosine_ndcg@10": 0.5681121746683402,
+      "MNanoDBPedia-it_cosine_ndcg@10": 0.6068255600927434,
+      "MNanoDBPedia-mean_cosine_ndcg@10": 0.5764677413740426,
+      "MNanoDBPedia-no_cosine_ndcg@10": 0.5609668125019728,
+      "MNanoDBPedia-pt_cosine_ndcg@10": 0.5801074571081114,
+      "MNanoDBPedia-sv_cosine_ndcg@10": 0.5754934611019041
+    },
+    "NanoDBPedia-ja": {
+      "MNanoDBPedia-ja-mean_cosine_ndcg@10": 0.607793412923947,
+      "MNanoDBPedia-ja_cosine_ndcg@10": 0.607793412923947
+    },
+    "NanoFEVER": {
+      "MNanoFEVER-ar_cosine_ndcg@10": 0.829386110513125,
+      "MNanoFEVER-de_cosine_ndcg@10": 0.823139962575593,
+      "MNanoFEVER-en_cosine_ndcg@10": 0.8724424475263557,
+      "MNanoFEVER-es_cosine_ndcg@10": 0.8828593001713432,
+      "MNanoFEVER-fr_cosine_ndcg@10": 0.7509381407954594,
+      "MNanoFEVER-it_cosine_ndcg@10": 0.8544218767031033,
+      "MNanoFEVER-mean_cosine_ndcg@10": 0.8391111267731001,
+      "MNanoFEVER-no_cosine_ndcg@10": 0.826571455255216,
+      "MNanoFEVER-pt_cosine_ndcg@10": 0.8468866641721634,
+      "MNanoFEVER-sv_cosine_ndcg@10": 0.8653541832455425
+    },
+    "NanoFEVER-ja": {
+      "MNanoFEVER-ja-mean_cosine_ndcg@10": 0.7755503010515641,
+      "MNanoFEVER-ja_cosine_ndcg@10": 0.7755503010515641
+    },
+    "NanoFiQA2018": {
+      "MNanoFiQA2018-ar_cosine_ndcg@10": 0.35878927204201594,
+      "MNanoFiQA2018-de_cosine_ndcg@10": 0.3535250386230549,
+      "MNanoFiQA2018-en_cosine_ndcg@10": 0.5124163673285884,
+      "MNanoFiQA2018-es_cosine_ndcg@10": 0.3805220895648997,
+      "MNanoFiQA2018-fr_cosine_ndcg@10": 0.34979989933435596,
+      "MNanoFiQA2018-it_cosine_ndcg@10": 0.32890955078724277,
+      "MNanoFiQA2018-mean_cosine_ndcg@10": 0.3569773959702302,
+      "MNanoFiQA2018-no_cosine_ndcg@10": 0.3029499692908921,
+      "MNanoFiQA2018-pt_cosine_ndcg@10": 0.3281029714266557,
+      "MNanoFiQA2018-sv_cosine_ndcg@10": 0.297781405334366
+    },
+    "NanoFiQA2018-ja": {
+      "MNanoFiQA2018-ja-mean_cosine_ndcg@10": 0.335525591097055,
+      "MNanoFiQA2018-ja_cosine_ndcg@10": 0.335525591097055
+    },
+    "NanoHotpotQA": {
+      "MNanoHotpotQA-ar_cosine_ndcg@10": 0.728950229115614,
+      "MNanoHotpotQA-de_cosine_ndcg@10": 0.7737285139164686,
+      "MNanoHotpotQA-en_cosine_ndcg@10": 0.7801378951693863,
+      "MNanoHotpotQA-es_cosine_ndcg@10": 0.7388921955611543,
+      "MNanoHotpotQA-fr_cosine_ndcg@10": 0.7571623416912887,
+      "MNanoHotpotQA-it_cosine_ndcg@10": 0.7631236832708947,
+      "MNanoHotpotQA-mean_cosine_ndcg@10": 0.7648584009779095,
+      "MNanoHotpotQA-no_cosine_ndcg@10": 0.7750724657952014,
+      "MNanoHotpotQA-pt_cosine_ndcg@10": 0.7826420888088002,
+      "MNanoHotpotQA-sv_cosine_ndcg@10": 0.7840161954723769
+    },
+    "NanoHotpotQA-ja": {
+      "MNanoHotpotQA-ja-mean_cosine_ndcg@10": 0.7128002111186521,
+      "MNanoHotpotQA-ja_cosine_ndcg@10": 0.7128002111186521
+    },
+    "NanoMSMARCO": {
+      "MNanoMSMARCO-ar_cosine_ndcg@10": 0.4631724639847954,
+      "MNanoMSMARCO-de_cosine_ndcg@10": 0.5098791033462391,
+      "MNanoMSMARCO-en_cosine_ndcg@10": 0.5849804514463571,
+      "MNanoMSMARCO-es_cosine_ndcg@10": 0.49811951886739164,
+      "MNanoMSMARCO-fr_cosine_ndcg@10": 0.5295831079529444,
+      "MNanoMSMARCO-it_cosine_ndcg@10": 0.5257877689930516,
+      "MNanoMSMARCO-mean_cosine_ndcg@10": 0.501135037738672,
+      "MNanoMSMARCO-no_cosine_ndcg@10": 0.4282152602394671,
+      "MNanoMSMARCO-pt_cosine_ndcg@10": 0.5454471629879832,
+      "MNanoMSMARCO-sv_cosine_ndcg@10": 0.4250305018298194
+    },
+    "NanoMSMARCO-ja": {
+      "MNanoMSMARCO-ja-mean_cosine_ndcg@10": 0.495952316384158,
+      "MNanoMSMARCO-ja_cosine_ndcg@10": 0.495952316384158
+    },
+    "NanoNFCorpus": {
+      "MNanoNFCorpus-ar_cosine_ndcg@10": 0.2243357909705374,
+      "MNanoNFCorpus-de_cosine_ndcg@10": 0.25517217570120965,
+      "MNanoNFCorpus-en_cosine_ndcg@10": 0.33823600104476415,
+      "MNanoNFCorpus-es_cosine_ndcg@10": 0.30777975784999784,
+      "MNanoNFCorpus-fr_cosine_ndcg@10": 0.32110819553443876,
+      "MNanoNFCorpus-it_cosine_ndcg@10": 0.2927151378210865,
+      "MNanoNFCorpus-mean_cosine_ndcg@10": 0.2922564958462841,
+      "MNanoNFCorpus-no_cosine_ndcg@10": 0.2825121169241804,
+      "MNanoNFCorpus-pt_cosine_ndcg@10": 0.31250511821097504,
+      "MNanoNFCorpus-sv_cosine_ndcg@10": 0.29594416855936756
+    },
+    "NanoNFCorpus-ja": {
+      "MNanoNFCorpus-ja-mean_cosine_ndcg@10": 0.2796027539405435,
+      "MNanoNFCorpus-ja_cosine_ndcg@10": 0.2796027539405435
+    },
+    "NanoNQ": {
+      "MNanoNQ-ar_cosine_ndcg@10": 0.4738238810099898,
+      "MNanoNQ-de_cosine_ndcg@10": 0.5169034233367948,
+      "MNanoNQ-en_cosine_ndcg@10": 0.6392269298711112,
+      "MNanoNQ-es_cosine_ndcg@10": 0.4884619602865586,
+      "MNanoNQ-fr_cosine_ndcg@10": 0.5204540082984815,
+      "MNanoNQ-it_cosine_ndcg@10": 0.4855978396962014,
+      "MNanoNQ-mean_cosine_ndcg@10": 0.5038628890871119,
+      "MNanoNQ-no_cosine_ndcg@10": 0.4701257167343876,
+      "MNanoNQ-pt_cosine_ndcg@10": 0.5014927378483448,
+      "MNanoNQ-sv_cosine_ndcg@10": 0.4386795047021373
+    },
+    "NanoNQ-ja": {
+      "MNanoNQ-ja-mean_cosine_ndcg@10": 0.5775267128386041,
+      "MNanoNQ-ja_cosine_ndcg@10": 0.5775267128386041
+    },
+    "NanoQuoraRetrieval": {
+      "MNanoQuoraRetrieval-ar_cosine_ndcg@10": 0.8278646215090353,
+      "MNanoQuoraRetrieval-de_cosine_ndcg@10": 0.837186290069087,
+      "MNanoQuoraRetrieval-en_cosine_ndcg@10": 0.9341474296990717,
+      "MNanoQuoraRetrieval-es_cosine_ndcg@10": 0.8820271175676624,
+      "MNanoQuoraRetrieval-fr_cosine_ndcg@10": 0.8201622507152796,
+      "MNanoQuoraRetrieval-it_cosine_ndcg@10": 0.847730219321762,
+      "MNanoQuoraRetrieval-mean_cosine_ndcg@10": 0.8367000757926226,
+      "MNanoQuoraRetrieval-no_cosine_ndcg@10": 0.771947811182082,
+      "MNanoQuoraRetrieval-pt_cosine_ndcg@10": 0.8096693691794988,
+      "MNanoQuoraRetrieval-sv_cosine_ndcg@10": 0.7995655728901241
+    },
+    "NanoQuoraRetrieval-ja": {
+      "MNanoQuoraRetrieval-ja-mean_cosine_ndcg@10": 0.9079719053009623,
+      "MNanoQuoraRetrieval-ja_cosine_ndcg@10": 0.9079719053009623
+    },
+    "NanoSCIDOCS": {
+      "MNanoSCIDOCS-ar_cosine_ndcg@10": 0.28951512418884506,
+      "MNanoSCIDOCS-de_cosine_ndcg@10": 0.31073509056652765,
+      "MNanoSCIDOCS-en_cosine_ndcg@10": 0.39435733197911177,
+      "MNanoSCIDOCS-es_cosine_ndcg@10": 0.35446969096552117,
+      "MNanoSCIDOCS-fr_cosine_ndcg@10": 0.332550621185874,
+      "MNanoSCIDOCS-it_cosine_ndcg@10": 0.3195499535476747,
+      "MNanoSCIDOCS-mean_cosine_ndcg@10": 0.3261106666309668,
+      "MNanoSCIDOCS-no_cosine_ndcg@10": 0.2808745088175287,
+      "MNanoSCIDOCS-pt_cosine_ndcg@10": 0.33883606805555255,
+      "MNanoSCIDOCS-sv_cosine_ndcg@10": 0.31410761037206514
+    },
+    "NanoSCIDOCS-ja": {
+      "MNanoSCIDOCS-ja-mean_cosine_ndcg@10": 0.3381960374851039,
+      "MNanoSCIDOCS-ja_cosine_ndcg@10": 0.3381960374851039
+    },
+    "NanoSciFact": {
+      "MNanoSciFact-ar_cosine_ndcg@10": 0.6158943198952038,
+      "MNanoSciFact-de_cosine_ndcg@10": 0.6936130981052494,
+      "MNanoSciFact-en_cosine_ndcg@10": 0.7666635173772184,
+      "MNanoSciFact-es_cosine_ndcg@10": 0.6618881209052857,
+      "MNanoSciFact-fr_cosine_ndcg@10": 0.7036002103688646,
+      "MNanoSciFact-it_cosine_ndcg@10": 0.6623497889374568,
+      "MNanoSciFact-mean_cosine_ndcg@10": 0.6681959232833932,
+      "MNanoSciFact-no_cosine_ndcg@10": 0.634286391757496,
+      "MNanoSciFact-pt_cosine_ndcg@10": 0.6301575127025395,
+      "MNanoSciFact-sv_cosine_ndcg@10": 0.645310349501225
+    },
+    "NanoTouche2020": {
+      "MNanoTouche2020-ar_cosine_ndcg@10": 0.4649113860517151,
+      "MNanoTouche2020-de_cosine_ndcg@10": 0.5154857305561092,
+      "MNanoTouche2020-en_cosine_ndcg@10": 0.5580849991842177,
+      "MNanoTouche2020-es_cosine_ndcg@10": 0.4781704716606799,
+      "MNanoTouche2020-fr_cosine_ndcg@10": 0.508312219288739,
+      "MNanoTouche2020-it_cosine_ndcg@10": 0.48064364243821456,
+      "MNanoTouche2020-mean_cosine_ndcg@10": 0.4979933275770823,
+      "MNanoTouche2020-no_cosine_ndcg@10": 0.48435621185708866,
+      "MNanoTouche2020-pt_cosine_ndcg@10": 0.4865894112113976,
+      "MNanoTouche2020-sv_cosine_ndcg@10": 0.5053858759455785
+    }
+  },
+  "nano_fineweb2ir": {
+    "NanoFineWeb2IR-arb_Arab_cosine_ndcg@10": 0.9586135311614679,
+    "NanoFineWeb2IR-ces_Latn_cosine_ndcg@10": 0.9426185950714292,
+    "NanoFineWeb2IR-cmn_Hani_cosine_ndcg@10": 0.9283998915977869,
+    "NanoFineWeb2IR-dan_Latn_cosine_ndcg@10": 0.9686135311614679,
+    "NanoFineWeb2IR-deu_Latn_cosine_ndcg@10": 1.0,
+    "NanoFineWeb2IR-ell_Grek_cosine_ndcg@10": 0.9421470803838846,
+    "NanoFineWeb2IR-eng_Latn_cosine_ndcg@10": 0.9871241437421605,
+    "NanoFineWeb2IR-fas_Arab_cosine_ndcg@10": 0.9353355801725679,
+    "NanoFineWeb2IR-fra_Latn_cosine_ndcg@10": 0.8729759642023812,
+    "NanoFineWeb2IR-hun_Latn_cosine_ndcg@10": 0.9338763851275671,
+    "NanoFineWeb2IR-ind_Latn_cosine_ndcg@10": 0.95035565121612,
+    "NanoFineWeb2IR-ita_Latn_cosine_ndcg@10": 0.8764693163757553,
+    "NanoFineWeb2IR-jpn_Jpan_cosine_ndcg@10": 0.9852371901428583,
+    "NanoFineWeb2IR-nld_Latn_cosine_ndcg@10": 0.9526185950714292,
+    "NanoFineWeb2IR-pol_Latn_cosine_ndcg@10": 0.914979928956448,
+    "NanoFineWeb2IR-por_Latn_cosine_ndcg@10": 0.9550828475372232,
+    "NanoFineWeb2IR-rus_Cyrl_cosine_ndcg@10": 0.96,
+    "NanoFineWeb2IR-spa_Latn_cosine_ndcg@10": 0.9489278926071438,
+    "NanoFineWeb2IR-swe_Latn_cosine_ndcg@10": 0.9704743802857166,
+    "NanoFineWeb2IR-tur_Latn_cosine_ndcg@10": 0.9483562699750574,
+    "NanoFineWeb2IR-vie_Latn_cosine_ndcg@10": 0.9378557852142875,
+    "NanoFineWeb2IR_mean_cosine_ndcg@10": 0.9461934552382264
+  },
+  "nano_miracl": {
+    "NanoMIRACL-ar_cosine_ndcg@10": 0.7159813245895191,
+    "NanoMIRACL-bn_cosine_ndcg@10": 0.6557347615638734,
+    "NanoMIRACL-de_cosine_ndcg@10": 0.6142857881341466,
+    "NanoMIRACL-en_cosine_ndcg@10": 0.6451146719526433,
+    "NanoMIRACL-es_cosine_ndcg@10": 0.714196293227969,
+    "NanoMIRACL-fa_cosine_ndcg@10": 0.692255846237923,
+    "NanoMIRACL-fi_cosine_ndcg@10": 0.7590971945501118,
+    "NanoMIRACL-fr_cosine_ndcg@10": 0.603279657690493,
+    "NanoMIRACL-hi_cosine_ndcg@10": 0.65128085385854,
+    "NanoMIRACL-id_cosine_ndcg@10": 0.6458179662981922,
+    "NanoMIRACL-ja_cosine_ndcg@10": 0.673998133845,
+    "NanoMIRACL-ko_cosine_ndcg@10": 0.6209661409618122,
+    "NanoMIRACL-ru_cosine_ndcg@10": 0.7143493917718859,
+    "NanoMIRACL-sw_cosine_ndcg@10": 0.5805953497600546,
+    "NanoMIRACL-te_cosine_ndcg@10": 0.9433298975036692,
+    "NanoMIRACL-th_cosine_ndcg@10": 0.8140644045739682,
+    "NanoMIRACL-yo_cosine_ndcg@10": 0.721939155186745,
+    "NanoMIRACL-zh_cosine_ndcg@10": 0.6723575757189189,
+    "NanoMIRACL_mean_cosine_ndcg@10": 0.6910358004125259
+  },
+  "summary": {
+    "NanoArguAna_mean_ndcg@10": 0.5181611256161548,
+    "NanoClimateFEVER-ja_mean_ndcg@10": 0.3544010279234292,
+    "NanoClimateFEVER_mean_ndcg@10": 0.3121963115000014,
+    "NanoDBPedia-ja_mean_ndcg@10": 0.607793412923947,
+    "NanoDBPedia_mean_ndcg@10": 0.5764677413740426,
+    "NanoFEVER-ja_mean_ndcg@10": 0.7755503010515641,
+    "NanoFEVER_mean_ndcg@10": 0.8391111267731001,
+    "NanoFiQA2018-ja_mean_ndcg@10": 0.335525591097055,
+    "NanoFiQA2018_mean_ndcg@10": 0.3569773959702302,
+    "NanoHotpotQA-ja_mean_ndcg@10": 0.7128002111186521,
+    "NanoHotpotQA_mean_ndcg@10": 0.7648584009779095,
+    "NanoMSMARCO-ja_mean_ndcg@10": 0.495952316384158,
+    "NanoMSMARCO_mean_ndcg@10": 0.501135037738672,
+    "NanoNFCorpus-ja_mean_ndcg@10": 0.2796027539405435,
+    "NanoNFCorpus_mean_ndcg@10": 0.2922564958462841,
+    "NanoNQ-ja_mean_ndcg@10": 0.5775267128386041,
+    "NanoNQ_mean_ndcg@10": 0.5038628890871119,
+    "NanoQuoraRetrieval-ja_mean_ndcg@10": 0.9079719053009623,
+    "NanoQuoraRetrieval_mean_ndcg@10": 0.8367000757926226,
+    "NanoSCIDOCS-ja_mean_ndcg@10": 0.3381960374851039,
+    "NanoSCIDOCS_mean_ndcg@10": 0.3261106666309668,
+    "NanoSciFact_mean_ndcg@10": 0.6681959232833932,
+    "NanoTouche2020_mean_ndcg@10": 0.4979933275770823,
+    "all_mean_ndcg@10": 0.5606630417552937,
+    "nano_fineweb2ir_mean_ndcg@10": 0.9461934552382264,
+    "nano_miracl_mean_ndcg@10": 0.6910358004125259
+  },
+  "timestamp_utc": "2026-07-07T01:52:44.215035+00:00"
+}

@@ -49,9 +49,9 @@ python -m pip install -r REQUIREMENTS.TXT -r requirements-features.txt
 python -m unittest discover -s tests -v
 ```
 
-Encoder requirements are in `requirements-encoder.txt`; the bundle workflow
-installs CPU PyTorch separately. Dependencies are installed or cached by CI,
-not vendored into this repository. The configured dataset catalog is in
+CI installs its CPU dependencies from the checked-in wheelhouse and loads the
+checked-in Bekko model. See [vendored dependencies](vendor/README.md) for
+platform, setup, licensing and update details. The configured dataset catalog is in
 `config/`; existing scripts and tests remain in `scripts/` and `tests/`.
 
 ## Attribution and licensing

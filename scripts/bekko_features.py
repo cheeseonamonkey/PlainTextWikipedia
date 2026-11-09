@@ -4,6 +4,8 @@ The 128D Matryoshka output is retained independently for each article.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 MODEL_ID = "hotchpotch/bekko-embedding-v1-a8m"
@@ -24,8 +26,8 @@ class BekkoEncoder:
         from sentence_transformers import SentenceTransformer
 
         self.model = SentenceTransformer(
-            MODEL_ID,
-            revision=MODEL_REVISION,
+            str(Path(__file__).resolve().parents[1] / "vendor" / "bekko"),
+            local_files_only=True,
             backend="openvino",
             device="cpu",
             truncate_dim=MODEL_DIMS,
