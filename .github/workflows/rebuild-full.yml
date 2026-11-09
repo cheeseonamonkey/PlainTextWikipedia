@@ -41,7 +41,7 @@ permissions:
 
 jobs:
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
       count: ${{ steps.plan.outputs.count }}
@@ -52,6 +52,7 @@ jobs:
       LANGUAGE: ${{ inputs.language }}
     steps:
       - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
       - id: plan
         shell: bash
         run: |
@@ -84,7 +85,7 @@ jobs:
       max-parallel: 8
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.shards) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     env:
       LANGUAGE: ${{ inputs.language }}
@@ -95,8 +96,12 @@ jobs:
       SNAPSHOT: ${{ needs.plan.outputs.snapshot }}
     steps:
       - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install converter dependencies
-        run: python -m pip install -r REQUIREMENTS.TXT
+        run: python -m pip install --no-index --find-links vendor/wheels -r REQUIREMENTS.TXT
       - name: Download assigned page ranges
         shell: bash
         run: |

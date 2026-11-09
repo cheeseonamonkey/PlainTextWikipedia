@@ -1,3 +1,5 @@
 simple_wiki.sqlite
 *.sqlite
 __pycache__/
+/vendor/wheels/torch-2.15.0+cpu-cp312-cp312-manylinux_2_28_x86_64.whl
+/vendor/bekko/openvino/openvino_model.bin

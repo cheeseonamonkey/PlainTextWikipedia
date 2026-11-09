@@ -44,7 +44,7 @@ permissions:
   actions: read
 jobs:
   bundle:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     concurrency:
       group: wikipedia-bundle-${{ inputs.repo_id }}
@@ -61,13 +61,10 @@ jobs:
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
-          cache-dependency-path: |
-            requirements-features.txt
-            requirements-encoder.txt
       - name: Resolve bundle identity and resume inputs
         id: artifact
         shell: bash
@@ -88,8 +85,7 @@ jobs:
           path: release
       - name: Install CPU dependencies
         run: |
-          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install -r requirements-encoder.txt
+          python -m pip install --no-index --find-links vendor/wheels -r requirements-encoder.txt
       - name: Check all publisher credentials before building
         if: inputs.publish
         run: python -m scripts.publish_preflight
