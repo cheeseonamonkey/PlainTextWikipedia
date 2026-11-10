@@ -128,6 +128,19 @@ class BundleSafetyTests(unittest.TestCase):
                 bundle.make_bundle(self.files, self.root / 'bad-vector', 'fr', bundle.links(REPO), {})
         self.assertFalse((self.root / 'bad-vector').exists())
 
+    def test_cached_symlink_stages_the_real_file(self):
+        from scripts.bundle_artifacts import link_or_copy
+        cache = self.root / 'cache'
+        cache.mkdir()
+        blob = cache / 'blob'
+        blob.write_bytes(b'cached source')
+        link = cache / 'snapshot.txt.gz'
+        link.symlink_to('blob')
+        destination = self.root / 'staged.txt.gz'
+        link_or_copy(link, destination)
+        self.assertFalse(destination.is_symlink())
+        self.assertEqual(destination.read_bytes(), b'cached source')
+
     def test_cross_filesystem_staging_copies_but_other_errors_propagate(self):
         import errno
         from scripts.bundle_artifacts import link_or_copy
