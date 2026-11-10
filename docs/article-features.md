@@ -81,7 +81,7 @@ convert XML into temporary source shards, require successful source coverage,
 then call the same bundle workflow. Every manual `publish` input defaults to false.
 All automatic publication, recovery and repair workflows have been removed.
 The one-language form defaults to **full English** for the first build-only
-acceptance run. Complete that test before a fleet rollout; no test has been launched.
+acceptance run. English runtime and storage needs have not yet been established.
 
 For `--publish`, all three credentials are required. Zenodo draft metadata is
 reserved before building so every file can contain its actual record link.
