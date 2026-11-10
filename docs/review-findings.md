@@ -1,7 +1,6 @@
 # Publication refactor review
 
-This describes the proposed implementation in PR #40. Production runs remain
-paused; the PR is unmerged and a full English build has not been launched.
+PR #40 was merged. A full English build and live publication remain unverified.
 
 | Drift/failure found | Correction |
 |---|---|
@@ -34,7 +33,7 @@ their former release commands.
 
 ## Evidence and remaining validation
 
-142 offline tests pass, and the OpenVINO requirements resolve without installing
+144 offline tests passed in the prior CI run, and the OpenVINO requirements resolve without installing
 models. Workflow lint and Python compilation pass. Tests exercise real fastText training, multilingual stemming and Unicode,
 normalized corpus DF, shared training vocabulary, unchanged article/text coverage,
 checksum/schema rejection, publisher failure aggregation, retry behavior and
