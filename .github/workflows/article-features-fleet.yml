@@ -40,7 +40,7 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
-      max-parallel: ${{ inputs.parallelism }}
+      max-parallel: ${{ fromJSON(inputs.parallelism) }}
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     uses: ./.github/workflows/article-features-one.yml
     with:

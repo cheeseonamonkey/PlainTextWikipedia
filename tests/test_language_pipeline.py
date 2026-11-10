@@ -10,6 +10,8 @@ def workflow(name):
 class LanguagePipelineTests(unittest.TestCase):
     def test_one_language_builder_for_fleet_and_rebuilds(self):
         fleet=workflow('article-features-fleet.yml')
+        self.assertEqual(fleet['jobs']['build']['strategy']['max-parallel'],
+                         '${{ fromJSON(inputs.parallelism) }}')
         rebuilt=workflow('publish-wikipedia.yml')
         for job in (fleet['jobs']['build'], rebuilt['jobs']['publish']):
             self.assertEqual(job['uses'],'./.github/workflows/article-features-one.yml')

@@ -33,7 +33,7 @@ def file_metadata(path):
 
 def link_or_copy(source, destination):
     try:
-        os.link(source, destination)
+        os.link(Path(source).resolve(strict=True), destination)
     except OSError as exc:
         if exc.errno != errno.EXDEV:
             raise
