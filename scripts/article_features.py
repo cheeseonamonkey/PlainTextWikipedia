@@ -18,6 +18,7 @@ import lzma
 import math
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -161,9 +162,10 @@ def article_rows(db, text_path):
         yield {**dict(row), "text": record[3]}
 
 
-def vocabulary(db, documents, limit):
+def vocabulary(db, documents, limit, df_cap=MAX_DF_RATIO):
+    cap = max(1, documents * df_cap) if df_cap is not None else documents + 1
     ordered = db.execute("SELECT term,tf,df FROM lexical_terms WHERE df <= ? ORDER BY tf DESC, term LIMIT ?",
-                         (max(1, documents * MAX_DF_RATIO), limit))
+                         (cap, limit))
     return [dict(term=term, tf=tf, df=df, idf=idf(documents, df)) for term, tf, df in ordered]
 
 
@@ -306,6 +308,11 @@ def build(files: list[Path], output: Path, code: str, *,
     if threads < 1 or timeout < 0 or dim < 1 or window < 1 or epoch < 1:
         raise ValueError("Require positive dimensions, window, epoch and threads, and a nonnegative timeout")
     output.mkdir(parents=True, exist_ok=True)
+    required = sum(p.stat().st_size for p in files) * 1.2
+    available = shutil.disk_usage(output).free
+    if available < required:
+        raise RuntimeError(f"Insufficient disk for the build: need ~{required / 1e9:.1f} GB "
+                           f"free at {output}, found {available / 1e9:.1f} GB")
     with tempfile.TemporaryDirectory(prefix=".features-", dir=output) as work:
         stage = Path(work)
         database = stage / "articles.sqlite"
@@ -320,6 +327,12 @@ def build(files: list[Path], output: Path, code: str, *,
                             text_output=text_path)
             print(f"Indexed {totals['articles']:,} articles; fitting shared vocabulary", flush=True)
             entries = vocabulary(db, totals["articles"], vocab_size)
+            if not entries:
+                # Tiny corpora (few, similar articles) can place every eligible
+                # term above the DF cap. Keep such editions buildable by lifting
+                # the cap rather than failing; the vocabulary remains honest.
+                print("::warning::Vocabulary empty under the DF cap; refitting without it", flush=True)
+                entries = vocabulary(db, totals["articles"], vocab_size, df_cap=None)
             lookup = {entry["term"]: entry for entry in entries}
             stopwords = set(normalizer.stopwords).union(
                 term for (term,) in db.execute(

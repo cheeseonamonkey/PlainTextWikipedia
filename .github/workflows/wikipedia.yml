@@ -117,6 +117,7 @@ jobs:
     outputs:
       code: ${{ needs.resolve.outputs.code }}
       repo: ${{ needs.resolve.outputs.repo }}
+      mode: ${{ needs.resolve.outputs.mode }}
     env:
       CODE: ${{ needs.resolve.outputs.code }}
       LANGUAGE: ${{ inputs.language }}
@@ -155,13 +156,40 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+      - name: Retain converted sources for publisher upload (fresh rebuild)
+        if: needs.resolve.outputs.mode == 'rebuild'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sources-${{ needs.resolve.outputs.code }}
+          path: |
+            sources/*.txt.gz
+            sources/build-manifest.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Always runs after build to expose the exact condition values downstream
+  # jobs evaluate; diagnoses skipped-publisher outcomes.
+  debug:
+    needs: build
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Print publish condition context
+        shell: bash
+        run: |
+          echo "inputs.publish = '${{ inputs.publish }}' (type: ${{ inputs.publish && 'truthy' || 'falsy' }})"
+          echo "needs.build.result = '${{ needs.build.result }}'"
+          echo "github.event_name = '${{ github.event_name }}'"
+          echo "github.event.inputs.publish = '${{ github.event.inputs.publish }}'"
 
   publish-hf:
     needs: build
-    if: inputs.publish && needs.build.result == 'success'
+    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
+      LANGUAGE: ${{ inputs.language }}
       CODE: ${{ needs.build.outputs.code }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
@@ -175,14 +203,26 @@ jobs:
         with:
           name: wikipedia-${{ needs.build.outputs.code }}
           path: release
-      - run: python -m scripts.publish_hf --language ${{ inputs.language }} --folder release
+      - name: Download rebuilt sources (fresh rebuild only)
+        if: needs.build.outputs.mode == 'rebuild'
+        uses: actions/download-artifact@v4
+        with:
+          name: sources-${{ needs.build.outputs.code }}
+          path: sources
+      - name: Publish bundle and rebuilt sources to Hugging Face
+        shell: bash
+        run: |
+          args=(--language "$LANGUAGE" --folder release)
+          if [[ -d sources ]]; then args+=(--sources-dir sources); fi
+          python -m scripts.publish_hf "${args[@]}"
 
   publish-kaggle:
     needs: build
-    if: inputs.publish && needs.build.result == 'success'
+    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
+      LANGUAGE: ${{ inputs.language }}
       CODE: ${{ needs.build.outputs.code }}
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
     steps:
@@ -196,14 +236,15 @@ jobs:
         with:
           name: wikipedia-${{ needs.build.outputs.code }}
           path: release
-      - run: python -m scripts.publish_kaggle --language ${{ inputs.language }} --folder release
+      - run: python -m scripts.publish_kaggle --language "$LANGUAGE" --folder release
 
   publish-zenodo:
     needs: build
-    if: inputs.publish && needs.build.result == 'success'
+    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
+      LANGUAGE: ${{ inputs.language }}
       CODE: ${{ needs.build.outputs.code }}
       ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
     steps:
@@ -217,7 +258,7 @@ jobs:
         with:
           name: wikipedia-${{ needs.build.outputs.code }}
           path: release
-      - run: python -m scripts.publish_zenodo --language ${{ inputs.language }} --folder release
+      - run: python -m scripts.publish_zenodo --language "$LANGUAGE" --folder release
 
   report:
     needs: [resolve, build, publish-hf, publish-kaggle, publish-zenodo]

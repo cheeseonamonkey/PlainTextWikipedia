@@ -16,6 +16,7 @@ import re
 import shutil
 from pathlib import Path
 
+from scripts.article_features import FASTTEXT_DIMS
 from scripts.article_parquet import ARTICLE_FIELDS, VERSION, schema
 
 RELEASE_FILES = frozenset({'articles.parquet', 'corpus-profile.json', 'manifest.json'})
@@ -98,7 +99,40 @@ def verify_bundle(folder):
         raise ValueError('Parquet row count differs from release manifest')
     if not _schema_equal(parquet.schema_arrow, schema(ARTICLE_FIELDS)):
         raise ValueError('Unexpected article Parquet schema')
+    _verify_profile(manifest, folder)
+    _verify_sample(parquet, dims=manifest.get('fasttext', {}).get('dim', FASTTEXT_DIMS))
     return manifest
+
+
+def _verify_profile(manifest, folder):
+    import numpy as np
+    profile = json.loads((folder / 'corpus-profile.json').read_text(encoding='utf-8'))
+    if profile.get('documents') != manifest['documents']:
+        raise ValueError('Corpus profile article count differs from the manifest')
+    if not isinstance(profile.get('fields'), dict) or not profile.get('fields'):
+        raise ValueError('Corpus profile has no field statistics')
+    dims = manifest.get('fasttext', {}).get('dim')
+    if type(dims) is not int or dims < 1:
+        raise ValueError('Manifest does not record the embedding dimension')
+    centroid = profile.get('fasttext_centroid')
+    if not isinstance(centroid, list) or len(centroid) != dims \
+            or not all(isinstance(v, (int, float)) and np.isfinite(v) for v in centroid):
+        raise ValueError('Corpus profile fastText centroid is invalid')
+
+
+def _verify_sample(parquet, rows=64, dims=FASTTEXT_DIMS):
+    """Bounded semantic spot-check of the first row group (sampled, not full)."""
+    import numpy as np
+    table = next(parquet.iter_batches(batch_size=rows, columns=['fasttext', 'counts', 'tfidf']))
+    batch = table.to_pylist()
+    if not batch:
+        raise ValueError('Parquet contains no rows')
+    for row in batch:
+        vector = row['fasttext']
+        if len(vector) != dims or not np.isfinite(np.asarray(vector, dtype=np.float64)).all():
+            raise ValueError('Sampled fastText vector is invalid')
+        for cell in ('counts', 'tfidf'):
+            json.loads(row[cell])  # must parse
 
 
 def _manifest_roots(manifest: dict) -> list[dict] | None:
@@ -140,6 +174,7 @@ def validate_manifest(manifest: dict, language: str) -> tuple[str, int]:
             files = root.get('files')
             if not isinstance(files, list) or not files:
                 raise ValueError('Incomplete source root')
+            groups = {}
             for name in files:
                 if (not isinstance(name, str) or not LEAF_RE.fullmatch(name)
                         or name in names or not name.startswith(language + 'wiki_')):
@@ -149,7 +184,28 @@ def validate_manifest(manifest: dict, language: str) -> tuple[str, int]:
                         or int(match[2]) != count
                         or (match[3] is not None and not 1 <= int(match[3]) <= int(match[4]))):
                     raise ValueError('Inconsistent source archive identity')
+                details = re.fullmatch(rf'{re.escape(language)}wiki_\d{{2}}([ab]*)_of_\d{{2}}(?:_part(\d{{2}})_of_(\d{{2}}))?\.txt\.gz', name)
+                if details is None:
+                    raise ValueError('Unexpected source archive name')
+                segment, part, total = details.groups()
+                groups.setdefault(segment, []).append((int(part), int(total)) if part else None)
                 names.add(name)
+            for parts in groups.values():
+                if parts == [None]:
+                    continue
+                if any(p is None for p in parts):
+                    raise ValueError('Mixed split and unsplit source leaf')
+                totals = {p[1] for p in parts}
+                if len(totals) != 1 or {p[0] for p in parts} != set(range(1, next(iter(totals)) + 1)) or len(parts) != next(iter(totals)):
+                    raise ValueError('Incomplete or inconsistent source parts')
+            def complete_tree(prefix):
+                if prefix in groups:
+                    return not any(s != prefix and s.startswith(prefix) for s in groups)
+                if not any(s.startswith(prefix) for s in groups):
+                    return False
+                return complete_tree(prefix + 'a') and complete_tree(prefix + 'b')
+            if not complete_tree(''):
+                raise ValueError('Incomplete or overlapping source recovery tree')
         if indices != set(range(1, count + 1)):
             raise ValueError('Source roots are not contiguous')
         return 'roots', count

@@ -20,6 +20,19 @@ class SourceCoverageTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 verify_sources(folder, 'de')
 
+    def test_recovery_tree_and_split_parts_must_be_complete(self):
+        from scripts.bundle_artifacts import validate_manifest
+        def manifest(files):
+            return {'language': 'enwiki', 'complete': True, 'expected_shards': 1,
+                    'roots': [{'root_shard': 1, 'complete': True, 'files': files}]}
+        valid = ['enwiki_01a_of_01_part01_of_02.txt.gz',
+                 'enwiki_01a_of_01_part02_of_02.txt.gz', 'enwiki_01b_of_01.txt.gz']
+        self.assertEqual(validate_manifest(manifest(valid), 'en'), ('roots', 1))
+        for files in (valid[1:], valid + ['enwiki_01_of_01.txt.gz'],
+                      ['enwiki_01_of_01_part01_of_02.txt.gz']):
+            with self.subTest(files=files), self.assertRaises(ValueError):
+                validate_manifest(manifest(files), 'en')
+
     def test_modern_manifest_must_be_complete(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

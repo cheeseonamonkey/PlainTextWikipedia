@@ -16,12 +16,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
 from functools import lru_cache
 from pathlib import Path
 
+from scripts.bundle_artifacts import verify_bundle
 from scripts.wiki_metadata import resolve_language
 
 BUNDLE_FILES = ("articles.parquet", "corpus-profile.json", "manifest.json")
@@ -55,8 +57,7 @@ def language_name(repo: str) -> str:
 
 def publish_kaggle(repo: str, folder: Path) -> None:
     # Reject an unverifiable bundle before touching Kaggle.
-    from scripts.bundle_artifacts import verify_bundle
-    manifest = verify_bundle(folder)
+    verify_bundle(folder)
 
     dataset = repo
     existing = run("status", dataset, "--format", "json", check=False)
@@ -76,14 +77,14 @@ def publish_kaggle(repo: str, folder: Path) -> None:
             raise RuntimeError(f"{dataset}: could not download current Kaggle files: "
                                f"{(result.stderr or result.stdout)[-500:]}")
         prior = [p for p in stage.iterdir() if p.is_file()]
-        if not prior:
-            raise RuntimeError(f"{dataset}: Kaggle download returned zero files; "
-                               "refusing to build a version that would erase content")
+        if not prior or any(p.is_dir() for p in stage.iterdir()):
+            raise RuntimeError(f"{dataset}: Kaggle download returned no files or contains directories; "
+                               "refusing to build a version that could erase content")
         # Remove the CLI's metadata file if present; we write our own.
         (stage / "dataset-metadata.json").unlink(missing_ok=True)
 
         for name in BUNDLE_FILES:
-            (stage / name).write_bytes((folder / name).read_bytes())
+            shutil.copyfile(folder / name, stage / name)
 
         meta = {
             "id": dataset,
@@ -112,13 +113,28 @@ def publish_kaggle(repo: str, folder: Path) -> None:
         run("version", "-p", str(stage), "-m",
             "Update enriched Parquet and original Wikipedia text",
             "--dir-mode", "skip", "--keep-tabular")
-        print(f"KAGGLE VERSIONED https://www.kaggle.com/datasets/{dataset}", flush=True)
-        # Kaggle processes versions asynchronously; confirm acceptance.
-        for _ in range(3):
-            time.sleep(30)
+        # Confirm acceptance: the version must be accepted and eventually READY.
+        # A still-processing upload is reported honestly, not retried (a retry
+        # would create a duplicate version).
+        accepted = False
+        for attempt in range(30):
+            time.sleep(60)
             probe = run("status", dataset, "--format", "json", check=False)
-            if probe.returncode == 0 and json.loads(probe.stdout).get("status"):
+            if probe.returncode != 0:
+                continue
+            state = json.loads(probe.stdout)
+            status = str(state.get("status", "")).lower()
+            if status == "ready":
+                accepted = True
                 break
+            if status not in ("", "processing", "pending"):
+                raise RuntimeError(f"{dataset}: Kaggle version status {status!r}; "
+                                   "the upload was rejected or failed server-side")
+        if accepted:
+            print(f"KAGGLE VERSIONED https://www.kaggle.com/datasets/{dataset} (READY)", flush=True)
+        else:
+            print(f"::warning::{dataset}: Kaggle version accepted but still processing "
+                  "after 30 minutes; verify the dataset page before relying on it", flush=True)
 
 
 def main():

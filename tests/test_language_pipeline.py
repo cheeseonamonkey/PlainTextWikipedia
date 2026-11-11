@@ -34,7 +34,7 @@ class LanguagePipelineTests(unittest.TestCase):
         for name in ('publish-hf', 'publish-kaggle', 'publish-zenodo'):
             job = single['jobs'][name]
             self.assertEqual(job['needs'], 'build')
-            self.assertEqual(job['if'], "inputs.publish && needs.build.result == 'success'")
+            self.assertEqual(job['if'], "${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}")
             script = str(job['steps'])
             self.assertIn(f'-m scripts.publish_{name.split("-", 1)[1]}', script)
         report = single['jobs']['report']

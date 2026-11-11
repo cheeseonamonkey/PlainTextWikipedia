@@ -49,8 +49,9 @@ def list_matching_depositions(requests, url: str, headers: dict, title: str) -> 
 
 
 def verify_published(document, folder: Path) -> None:
-    remote = {item["filename"]: item for item in document.get("files", [])}
-    if set(remote) != set(BUNDLE_FILES):
+    files = document.get("files", [])
+    remote = {item["filename"]: item for item in files}
+    if document.get("submitted") is not True or len(remote) != len(files) or set(remote) != set(BUNDLE_FILES):
         raise ValueError("Published Zenodo file set differs from the bundle")
     for name in BUNDLE_FILES:
         expected = _md5(folder / name)
@@ -74,7 +75,8 @@ def zenodo_publish(folder: Path, language: str, repo: str) -> str:
     url = "https://zenodo.org/api/deposit/depositions"
 
     title = f"Plaintext Wikipedia ({language}) — Parquet edition"
-    fingerprint = _md5(folder / "manifest.json")
+    with (folder / "manifest.json").open("rb") as stream:
+        fingerprint = hashlib.file_digest(stream, "sha256").hexdigest()
     payload = {
         "metadata": {
             "title": title,
@@ -101,6 +103,7 @@ def zenodo_publish(folder: Path, language: str, repo: str) -> str:
 
     if prior and prior.get("submitted") and prior.get("metadata", {}).get("notes") == (
             f"parquet-manifest-sha256:{fingerprint}"):
+        verify_published(prior, folder)
         print(f"SKIP Zenodo: published edition is current ({prior['id']})", flush=True)
         return f"https://zenodo.org/records/{prior['id']}"
 
@@ -126,6 +129,8 @@ def zenodo_publish(folder: Path, language: str, repo: str) -> str:
 
     bucket = draft["links"]["bucket"]
     publish_url = draft["links"]["publish"]
+    if not bucket.startswith('https://zenodo.org/api/files/') or not publish_url.startswith(url + '/'):
+        raise RuntimeError('Unexpected Zenodo upload or publish URL')
     total = sum((folder / name).stat().st_size for name in BUNDLE_FILES)
     if total + 1_000_000 > ZENODO_MAX:
         raise RuntimeError("Exceeds Zenodo default 50 GB record limit")
@@ -146,6 +151,10 @@ def zenodo_publish(folder: Path, language: str, repo: str) -> str:
                 and int(existing.get("filesize", -1)) == path.stat().st_size:
             print(f"REUSED Zenodo draft file: {name}", flush=True)
             continue
+        if existing:
+            response = requests.delete(f"{url}/{draft['id']}/files/{existing['id']}",
+                                       headers=headers, timeout=30)
+            response.raise_for_status()
         with path.open("rb") as stream:
             response = requests.put(f"{bucket}/{name}", data=stream,
                                     headers=headers, timeout=(30, 7200))
