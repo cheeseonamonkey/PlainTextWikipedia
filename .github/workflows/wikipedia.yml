@@ -234,6 +234,8 @@ jobs:
         with:
           name: wikipedia-${{ needs.build.outputs.code }}
           path: release
+      - name: Authenticate Kaggle CLI
+        run: python scripts/kaggle_auth.py --owner ffatty
       - run: python -m scripts.publish_kaggle --language "$LANGUAGE" --folder release
 
   publish-zenodo:
