@@ -1,114 +1,89 @@
-# Complete Wikipedia bundles (schema v7)
+# Article features (schema v8)
 
 One shared implementation handles every language. The Wikimedia code affects
 article URLs, Unicode tokenization and stopword lookup; it does not select a
-separate build or publication path. Chinese uses Wikimedia's `zh` code.
+separate build path. Chinese uses Wikimedia's `zh` code.
 
-Each language dataset receives these **same five files on all three services**:
+Each language build produces **three files**:
 
 | File | Contents |
 |---|---|
-| `articles.parquet` | One row per article; 32 columns; Zstandard-compressed row groups |
-| `articles.txt.xz` | All records combined: title, single-line body, blank line |
-| `features.zip` | Extract into `features/`: corpus profile, vocabulary and full word statistics |
-| `models.zip` | Extract into `models/`: compressed trained fastText model and model configuration |
-| `manifest.json` | Full source provenance, article count, byte sizes, SHA256/MD5, all publisher and repository links |
+| `articles.parquet` | One row per article; 13 columns; Zstandard-compressed row groups |
+| `corpus-profile.json` | Language-level vocabulary (TF/DF/IDF), field moments/percentiles, fastText centroid |
+| `manifest.json` | Schema version, article count, configuration, byte sizes, SHA256 checksums |
 
-ZIP packaging is identical everywhere because Zenodo cannot store native directories.
-The contained statistics/model files are already compressed, so ZIP uses stored entries.
-No public databases, per-shard Parquets, SQL dumps or fused embeddings are generated.
-One temporary SQLite index supports exact corpus counts during the build and is deleted.
-It stores counts and article metadata, not another full plaintext corpus. The
-embedding pass streams article bodies from the combined `txt.xz` and checks them
-against that index. The temporary training text is deleted once fastText is loaded.
+No Bekko or BM25 columns, no combined `.txt.xz` re-upload, no ZIP archives, no
+published model files. One temporary SQLite index supports exact corpus counts
+during the build and is deleted; it stores counts and metadata, not another
+plaintext corpus. The embedding pass streams article bodies from the temporary
+spill file and checks them against that index.
 
 ## Article columns
 
-Identity/content: `title`, `text`, `article_url`, `char_count`.
+`text` is the first column; `fasttext` is a native `list<float32>`; every other
+heavy field is a compact JSON object in a single string cell, grouped by kind:
 
-Document metrics: `sentence_count`, `distinct_terms`, `mean_sentence_tokens`,
-`mean_token_chars`, `lexical_diversity`, `hapax_ratio`, `stopword_ratio`,
-`digit_ratio`, `punctuation_ratio`, `repetition_ratio`, `entropy`,
-`normalized_entropy`, `simpson_diversity`, `vocab_coverage`,
-`mean_idf`, `idf_std`, `tfidf_l2`, `tfidf_top5_share`, `tfidf_entropy`, `title_overlap`.
+| Column | Type | Contents |
+|---|---|---|
+| `text` | string | cleaned article body (verbatim from the source shards) |
+| `title` | string | article title |
+| `article_url` | string | best-effort URL rebuilt from the title; titles are not canonical IDs |
+| `char_count` | int64 | body character count (scalar for cheap filtering) |
+| `counts` | JSON | `word_count, sentence_count, distinct_terms, byte_count, mean_sentence_tokens, mean_token_chars, reading_time_minutes` |
+| `ratios` | JSON | `lexical_diversity, hapax_ratio, stopword_ratio, digit_ratio, punctuation_ratio, repetition_ratio, vocab_coverage, title_overlap` |
+| `diversity` | JSON | `entropy, normalized_entropy, simpson_diversity` |
+| `tfidf_stats` | JSON | `l2, top5_share, entropy, mean_idf, idf_std` |
+| `word_counts` | JSON | raw surface-form counts per article |
+| `tfidf` | JSON | stemmed-term TF-IDF, **L2-normalized per article**; corpus IDF is language-wide |
+| `keywords` | JSON | top 15 TF-IDF terms with weights |
+| `fasttext` | list&lt;float32&gt; | normalized 180-d CBOW embedding (mean of in-vocabulary stemmed terms) |
+| `source` | JSON | `{file, ordinal}` — join key back to the published `data/*.txt.gz` shards |
 
-JSON columns: `word_counts` (all terms), `tfidf` (term → L2-normalized weight),
-`bm25` (term → score), `keywords` (top 16 term → raw TF-IDF),
-`fasttext` (160 floats), `bekko` (128 floats).
+Paragraph boundaries are not recoverable: the plaintext converter collapses all
+whitespace, so the source shards contain single-line bodies.
 
-Bekko metadata: `bekko_input_tokens`, `bekko_truncated`.
+## fastText
 
-TF-IDF, BM25 and fastText share **one top-10K vocabulary** after NFKC/case
-normalization, multilingual stopword filtering, dependency-backed Snowball stemming and
-removal of terms appearing in more than half the corpus (except one-document
-corpora). TF/DF counts merge inflected forms within each article before counting
-document frequency. A language without a supported stemmer retains normalized
-surface forms; this is explicit in the exported configuration. No hand-written
-stemming or English-only feature implementation is used.
+CBOW over every article, restricted to the shared top-N stemmed vocabulary
+(default 12 000 terms, DF-capped). No subword hashing (`minn=maxn=0`,
+`bucket=0`): OOV buckets are unnecessary because only in-vocabulary terms are
+embedded. Defaults: `dim=180`, `ws=8`, `epoch=1`, `neg=8`, `lr=0.05`; all
+exposed as workflow inputs. Vectors are L2-normalized per article. Article
+vectors are the model's sentence vector over the article's stemmed, in-vocabulary
+terms, in source order.
 
-The article `word_counts` dictionary keeps all raw normalized surface forms,
-including words outside that feature vocabulary. Raw corpus statistics and
-pre-top-K normalized statistics are both exported. Every article is published,
-even if it has no selected terms; its fastText vector is then zero. FastText
-training visits every article and retains only the selected normalized terms,
-with one CBOW epoch and no article-sampling cap.
+## Normalization
 
-Bekko receives an **original, case-preserving title/lead excerpt**, bounded to
-256 model tokens. It does not receive stemmed text. Its model revision is pinned
-and recorded. Original full text is always retained, and the two embeddings stay
-independent. `tfidf_coverage` was removed because it duplicates `vocab_coverage`
-when both use the same vocabulary.
-VADER, readability, saliency, contradiction and fused-vector features are removed.
+NFKC + casefold + quote/dash folding, Snowball stemming via PyStemmer where the
+language is supported, `stopwordsiso` stopword sets. Languages without a
+Snowball stemmer retain normalized surface forms; no article is ever omitted.
+`word_counts` stay raw (unstemmed); `tfidf`/`keywords`/`fasttext` use stemmed
+terms. IDF is `ln((N+1)/(df+1))+1`; terms with DF above half the corpus are
+excluded from the vocabulary and treated as stopword-like.
 
-## Corpus statistics
+## Corpus profile
 
-`features/corpus-profile.json` contains count, mean, population standard deviation,
-min/max and approximate percentiles for numeric article columns, plus independent
-Bekko and fastText centroids. Percentiles use a deterministic 2048-row reservoir.
-`features/words.jsonl.gz` streams every term's corpus frequency, document frequency
-and smoothed IDF without a vocabulary cap. `features/normalized-words.jsonl.gz`
-records stemmed/stopword-filtered TF/DF/IDF before top-K selection.
-`features/vocabulary.json.gz` records the shared selected vocabulary and settings. Corpus counts/embeddings have
-clear aggregate definitions; titles and URLs are article-only attributes.
+`corpus-profile.json` contains: `documents`, `fields` (count/mean/stddev/min/max
+and reservoir-sampled p05/p50/p95 per numeric feature), `fasttext_centroid`
+(unnormalized mean vector), and `vocabulary` — the full selected vocabulary with
+per-term `tf`, `df`, `idf`.
 
-## Build, then publish
+## Verification
 
-`python -m scripts.wikipedia_bundle --repo ffatty/plaintext-wikipedia-full-english --output release` builds
-and verifies a local bundle. It never uploads data without `--publish`.
+`manifest.json` records byte size and SHA256 for both artifacts plus the schema
+version and article count. A verifier re-checks checksums, row count, and the
+exact Parquet schema before any publisher touches the bundle. Source coverage is
+validated before the build: modern per-root manifests are checked strictly;
+legacy aggregate manifests are accepted only when every expected unsplit shard
+is present. Legacy manifests cannot prove per-page-range completeness, and the
+build log says so explicitly.
 
-The manual one-language/fleet workflows call this same command. Rebuild workflows
-convert XML into temporary source shards, require successful source coverage,
-then call the same bundle workflow. Every manual `publish` input defaults to false.
-All automatic publication, recovery and repair workflows have been removed.
-The one-language form defaults to **full English** for the first build-only
-acceptance run. English runtime and storage needs have not yet been established.
+## Limitations
 
-For `--publish`, all three credentials are required. Zenodo draft metadata is
-reserved before building so every file can contain its actual record link.
-**All data is built and verified before the first data upload**. HF receives one
-commit guarded by its parent revision; Kaggle receives a fresh version with
-`--keep-tabular`; Zenodo receives the same local files. All three targets are attempted, even if an earlier upload fails; the job then
-reports all failures together. Services do not support an atomic cross-service
-transaction, so failed targets may temporarily lag successful ones. Retained bundle artifacts permit retry
-with `--resume --publish`; incomplete remote publication is never labeled complete.
-The one-language workflow accepts `bundle_run_id` to restore a retained bundle
-and resume it on GitHub. A build-only bundle can be published this way without
-recomputing features: only the manifest gets its newly reserved Zenodo link.
-Existing output directories are never overwritten by another build.
-
-Local verification checks exact file/archive membership, article schema, row
-count, sizes, SHA256 and MD5. HF retries recheck every artifact, including the
-manifest; Kaggle waits for an in-progress version and downloads that specific
-version for verification. ZIP member metadata is fixed, so file timestamps do
-not alter the archive identity.
-
-Source downloads are pinned to an immutable HF revision and their SHA256s checked.
-A missing/incomplete source coverage manifest fails the build; it requires source
-recovery rather than pretending an existing subset is complete. This does not
-independently establish that historical converters retained every eligible article.
-
-No file is omitted for size. API quotas, insufficient disk or the GitHub-hosted
-job time limit produce explicit failures. Large-language capacity and real Bekko
-throughput still need a controlled CI validation before a fleet rollout; small
-local fixtures do not establish that English fits a standard runner. Production
-publishing has not been exercised by this refactor.
+- Article URLs are reconstructed from titles and can break if pages move.
+- Page IDs are not preserved in the source shards, so joins to Wikidata are
+  title-based, not ID-based.
+- `reading_time_minutes` assumes 200 words/minute; meaningless for unspaced
+  scripts.
+- Legacy-manifest languages (most pre-2026-11 datasets) carry only global
+  completeness evidence.

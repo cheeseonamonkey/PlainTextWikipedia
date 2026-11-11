@@ -1,43 +1,17 @@
-name: Rebuild Wikipedia shards
-
+name: Rebuild Wikipedia source shards
 on:
-  workflow_dispatch:
-    inputs:
-      publish:
-        description: Publish complete bundle to all three targets
-        type: boolean
-        default: false
-      language:
-        description: Wikimedia project code (e.g. eswiki or zhwiki)
-        required: true
-        default: enwiki
-        type: string
-      kaggle_dataset:
-        description: Optional Kaggle destination override
-        required: false
-        type: string
-      hf_repo:
-        description: Optional Hugging Face destination override
-        required: false
-        type: string
   workflow_call:
     inputs:
-      publish:
-        type: boolean
-        default: false
       language:
         required: true
         type: string
-      kaggle_dataset:
+    secrets:
+      HF_TOKEN:
         required: false
-        type: string
-      hf_repo:
-        required: false
-        type: string
 
 permissions:
   contents: read
-  actions: write
+  actions: read
 
 jobs:
   plan:
@@ -58,12 +32,9 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$LANGUAGE" =~ ^[a-z][a-z0-9_-]*wiki$ ]] || exit 1
-          . config/datasets.env
-          max_shards="$WIKIPEDIA_SHARD_TARGET"
-          [[ "$max_shards" == 8 ]] || { echo "::error::Expected eight output shards"; exit 1; }
           plan="$(python scripts/multistream_shards.py plan \
             --base-url "https://dumps.wikimedia.org/$LANGUAGE/latest" \
-            --language "$LANGUAGE" --max-shards "$max_shards")"
+            --language "$LANGUAGE" --max-shards 8)"
           python - "$plan" >> "$GITHUB_OUTPUT" <<'PY'
           import json,sys
           p=json.loads(sys.argv[1])
@@ -74,8 +45,6 @@ jobs:
           print(f"mode={p['mode']}")
           print(f"archive_bytes={p['archive_bytes']}")
           print(f"snapshot={p.get('snapshot','')}")
-          print(f"::notice::Wikipedia source: {p['reason']}, {n} planned shard jobs",
-                file=sys.stderr)
           PY
 
   build:
@@ -149,15 +118,3 @@ jobs:
       - name: Free runner disk
         if: always()
         run: rm -rf output ranges ranges.txt download-failures.json
-
-  publish:
-    needs: [plan, build]
-    if: ${{ needs.plan.result == 'success' && needs.build.result == 'success' }}
-    uses: ./.github/workflows/publish-wikipedia.yml
-    with:
-      publish: ${{ inputs.publish }}
-      language: ${{ inputs.language }}
-      count: ${{ needs.plan.outputs.count }}
-      hf_repo: ${{ inputs.hf_repo }}
-      kaggle_dataset: ${{ inputs.kaggle_dataset }}
-    secrets: inherit
