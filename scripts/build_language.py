@@ -27,8 +27,30 @@ from scripts.wiki_metadata import resolve_language
 RAW_RE = re.compile(r"data/[^/]+\.txt\.gz$")
 
 
+def effective_api(api: HfApi, repo: str) -> HfApi:
+    """Fall back to anonymous access when the stored token is unusable.
+
+    HF rejects requests carrying an expired token with 401 even for public
+    datasets that anonymous callers can read. Publishing still requires a
+    valid token; this only keeps public-source builds unblocked.
+    """
+    try:
+        api.repo_info(repo, repo_type="dataset")
+        return api
+    except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status in (401, 403) and api.token:
+            print("::warning::HF_TOKEN was rejected; retrying anonymous read-only access. "
+                  "Refresh the token secret to publish.", flush=True)
+            anonymous = HfApi(token=None)
+            anonymous.repo_info(repo, repo_type="dataset")  # must succeed anonymously
+            return anonymous
+        raise
+
+
 def source_archives(api: HfApi, repo: str, folder: Path) -> tuple[list[Path], int]:
     """Download the existing repo's data/*.txt.gz shards and its manifest."""
+    api = effective_api(api, repo)
     revision = api.repo_info(repo, repo_type="dataset").sha
     if not revision:
         raise ValueError('Cannot pin source repository revision')
