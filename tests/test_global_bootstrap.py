@@ -11,7 +11,6 @@ class GlobalBootstrapTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.entries=json.loads((ROOT/"config/additional-languages.json").read_text())["languages"]
-        cls.full_workflow=(ROOT/".github/workflows/rebuild-full.yml").read_text()
 
     def test_all_58_projects_are_configured_once(self):
         wave=[x for x in self.entries if x.get("collection")=="global-expansion-2026-10-15"]

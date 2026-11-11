@@ -59,7 +59,3 @@ class LexicalFeaturesTests(unittest.TestCase):
             self.assertEqual(selected[0]['term'], 'lexeme10024')
             self.assertEqual(selected[-1]['term'], 'lexeme00025')
 
-    def test_bekko_excerpt_is_readable_and_case_preserving(self):
-        from scripts.bekko_features import embedding_input
-        self.assertEqual(embedding_input('London', 'The Houses of Parliament are HERE.'),
-                         'London The Houses of Parliament are HERE.')

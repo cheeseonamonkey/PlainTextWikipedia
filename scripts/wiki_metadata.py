@@ -49,6 +49,26 @@ def project_repo(project: str) -> str:
     return matches[0]
 
 
+def resolve_language(prefix: str) -> tuple[str, str, str]:
+    """Resolve a short language prefix (en, zh, es, simple, enwiki) to
+    (repo, project, code). Accepts both bare prefixes and full project codes.
+    """
+    prefix_lower = prefix.strip().lower()
+    if not prefix_lower:
+        raise ValueError("Empty language prefix")
+    if prefix_lower == "simple":
+        return SIMPLE, "simplewiki", "simple"
+    if prefix_lower.endswith("wiki"):
+        project = prefix_lower
+    else:
+        project = prefix_lower + "wiki"
+    if not re.fullmatch(r"[a-z0-9_-]+wiki", project):
+        raise ValueError(f"Invalid Wikimedia project: {project}")
+    repo = project_repo(project)
+    code = wiki_code(repo)
+    return repo, project, code
+
+
 def article_url(title: str, code: str) -> str:
     """Construct a best-effort page URL. Titles are not canonical identifiers."""
     if not re.fullmatch(r"[a-z0-9_-]+", code):

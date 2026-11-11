@@ -1,0 +1,240 @@
+name: Build Wikipedia language dataset
+run-name: Wikipedia (${{ inputs.language }}) ${{ inputs.publish && '— publish' || '— build-only' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      language:
+        description: Language prefix (en, zh, es, simple, enwiki, ...)
+        type: string
+        required: true
+      publish:
+        description: Publish the verified parquet bundle to HF + Kaggle + Zenodo (parallel, independent)
+        type: boolean
+        default: false
+      rebuild:
+        description: Force a fresh Wikimedia dump conversion instead of reusing existing HF sources
+        type: boolean
+        default: false
+      vocab:
+        description: Shared stemmed vocabulary size for fastText + TF-IDF
+        type: number
+        default: 12000
+      dim:
+        description: fastText embedding dimension
+        type: number
+        default: 180
+      window:
+        description: fastText context window
+        type: number
+        default: 8
+      epoch:
+        description: fastText training epochs
+        type: number
+        default: 1
+  workflow_call:
+    inputs:
+      language:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+      rebuild:
+        type: boolean
+        default: false
+      vocab:
+        type: number
+        default: 12000
+      dim:
+        type: number
+        default: 180
+      window:
+        type: number
+        default: 8
+      epoch:
+        type: number
+        default: 1
+    secrets:
+      HF_TOKEN:
+        required: false
+      KAGGLE_TOKEN:
+        required: false
+      ZENODO_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      repo: ${{ steps.resolve.outputs.repo }}
+      code: ${{ steps.resolve.outputs.code }}
+      project: ${{ steps.resolve.outputs.project }}
+      mode: ${{ steps.resolve.outputs.mode }}
+    env:
+      LANGUAGE: ${{ inputs.language }}
+      REBUILD: ${{ inputs.rebuild }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --no-index --find-links vendor/wheels huggingface_hub
+      - id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from scripts.wiki_metadata import resolve_language
+          repo, project, code = resolve_language(os.environ["LANGUAGE"])
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print(f"repo={repo}", file=out)
+              print(f"code={code}", file=out)
+              print(f"project={project}", file=out)
+          PY
+          if [[ "$REBUILD" == "true" ]]; then echo "mode=rebuild" >> "$GITHUB_OUTPUT"; else echo "mode=existing" >> "$GITHUB_OUTPUT"; fi
+
+  # Fresh-dump path: convert Wikimedia dumps into shard artifacts.
+  rebuild:
+    needs: resolve
+    if: needs.resolve.outputs.mode == 'rebuild'
+    uses: ./.github/workflows/rebuild-shards.yml
+    with:
+      language: ${{ needs.resolve.outputs.project }}
+    secrets: inherit
+
+  build:
+    needs: [resolve, rebuild]
+    if: always() && needs.resolve.result == 'success' && (needs.resolve.outputs.mode != 'rebuild' || needs.rebuild.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      code: ${{ needs.resolve.outputs.code }}
+      repo: ${{ needs.resolve.outputs.repo }}
+    env:
+      CODE: ${{ needs.resolve.outputs.code }}
+      LANGUAGE: ${{ inputs.language }}
+      VOCAB: ${{ inputs.vocab }}
+      DIM: ${{ inputs.dim }}
+      WINDOW: ${{ inputs.window }}
+      EPOCH: ${{ inputs.epoch }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU dependencies
+        run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
+      - name: Collect converted source artifacts (fresh rebuild)
+        if: needs.resolve.outputs.mode == 'rebuild'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: full-${{ needs.resolve.outputs.project }}-*
+          merge-multiple: true
+          path: sources
+      - name: Build and verify parquet bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--language "$LANGUAGE" --output release --vocab "$VOCAB" --dim "$DIM" --window "$WINDOW" --epoch "$EPOCH")
+          if [[ -d sources ]]; then args+=(--sources sources); fi
+          python -m scripts.build_language "${args[@]}"
+      - name: Retain verified bundle for inspection
+        uses: actions/upload-artifact@v4
+        with:
+          name: wikipedia-${{ needs.resolve.outputs.code }}
+          path: release/*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-hf:
+    needs: build
+    if: inputs.publish && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CODE: ${{ needs.build.outputs.code }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: wikipedia-${{ needs.build.outputs.code }}
+          path: release
+      - run: python -m scripts.publish_hf --language ${{ inputs.language }} --folder release
+
+  publish-kaggle:
+    needs: build
+    if: inputs.publish && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CODE: ${{ needs.build.outputs.code }}
+      KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: wikipedia-${{ needs.build.outputs.code }}
+          path: release
+      - run: python -m scripts.publish_kaggle --language ${{ inputs.language }} --folder release
+
+  publish-zenodo:
+    needs: build
+    if: inputs.publish && needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CODE: ${{ needs.build.outputs.code }}
+      ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: wikipedia-${{ needs.build.outputs.code }}
+          path: release
+      - run: python -m scripts.publish_zenodo --language ${{ inputs.language }} --folder release
+
+  report:
+    needs: [resolve, build, publish-hf, publish-kaggle, publish-zenodo]
+    if: always() && inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Summarize independent publisher outcomes
+        shell: bash
+        run: |
+          {
+            echo "| Publisher | Result |"
+            echo "|---|---|"
+            echo "| Hugging Face | ${{ needs['publish-hf'].result }} |"
+            echo "| Kaggle | ${{ needs['publish-kaggle'].result }} |"
+            echo "| Zenodo | ${{ needs['publish-zenodo'].result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ needs['publish-hf'].result }}" != success || "${{ needs['publish-kaggle'].result }}" != success || "${{ needs['publish-zenodo'].result }}" != success ]]; then
+            echo "::error::One or more publishers failed; the build bundle artifact is retained for retry"
+            exit 1
+          fi
