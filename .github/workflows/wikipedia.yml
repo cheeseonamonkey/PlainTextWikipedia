@@ -11,7 +11,7 @@ on:
       publish:
         description: Publish the verified parquet bundle to HF + Kaggle + Zenodo (parallel, independent)
         type: boolean
-        default: false
+        default: true
       rebuild:
         description: Force a fresh Wikimedia dump conversion instead of reusing existing HF sources
         type: boolean
@@ -39,7 +39,7 @@ on:
         required: true
       publish:
         type: boolean
-        default: false
+        default: true
       rebuild:
         type: boolean
         default: false

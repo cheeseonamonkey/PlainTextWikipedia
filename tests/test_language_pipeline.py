@@ -17,7 +17,7 @@ class LanguagePipelineTests(unittest.TestCase):
         self.assertIn('workflow_dispatch', triggers)
         self.assertIn('workflow_call', triggers)
         inputs = triggers['workflow_dispatch']['inputs']
-        self.assertEqual(inputs['publish']['default'], 'false')
+        self.assertEqual(inputs['publish']['default'], 'true')
         self.assertEqual(inputs['rebuild']['default'], 'false')
         self.assertEqual(inputs['language']['required'], 'true')
         # Feature knobs are exposed with v8 defaults.
@@ -63,11 +63,13 @@ class LanguagePipelineTests(unittest.TestCase):
                     self.assertTrue((ROOT / Path(uses).name).exists(), uses)
 
     def test_all_publish_entries_require_explicit_opt_in(self):
+        # publish now defaults to true for the single-language workflow (the
+        # user's workflow intent); every other workflow must stay build-only.
         for file in ROOT.glob('*.yml'):
             events = workflow(file.name).get('on', {})
             for trigger in ('workflow_dispatch', 'workflow_call'):
                 settings = (events.get(trigger) or {}).get('inputs', {}).get('publish')
-                if settings is not None:
+                if settings is not None and file.name != 'wikipedia.yml':
                     self.assertEqual(settings.get('default'), 'false', (file.name, trigger))
 
 
