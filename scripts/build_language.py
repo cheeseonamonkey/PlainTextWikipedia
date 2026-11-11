@@ -42,7 +42,9 @@ def effective_api(api: HfApi, repo: str) -> HfApi:
         if status in (401, 403) and api.token:
             print("::warning::HF_TOKEN was rejected; retrying anonymous read-only access. "
                   "Refresh the token secret to publish.", flush=True)
-            anonymous = HfApi(token=None)
+            # token=False (not None): None re-reads HF_TOKEN from the environment,
+            # which would re-send the same expired credential.
+            anonymous = HfApi(token=False)
             anonymous.repo_info(repo, repo_type="dataset")  # must succeed anonymously
             return anonymous
         raise
