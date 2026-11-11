@@ -119,7 +119,6 @@ jobs:
       repo: ${{ needs.resolve.outputs.repo }}
       mode: ${{ needs.resolve.outputs.mode }}
     env:
-      CODE: ${{ needs.resolve.outputs.code }}
       LANGUAGE: ${{ inputs.language }}
       VOCAB: ${{ inputs.vocab }}
       DIM: ${{ inputs.dim }}
@@ -174,6 +173,7 @@ jobs:
     needs: build
     if: always()
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Print publish condition context
         shell: bash
@@ -190,7 +190,6 @@ jobs:
     timeout-minutes: 60
     env:
       LANGUAGE: ${{ inputs.language }}
-      CODE: ${{ needs.build.outputs.code }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -223,7 +222,6 @@ jobs:
     timeout-minutes: 120
     env:
       LANGUAGE: ${{ inputs.language }}
-      CODE: ${{ needs.build.outputs.code }}
       KAGGLE_TOKEN: ${{ secrets.KAGGLE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -245,7 +243,6 @@ jobs:
     timeout-minutes: 120
     env:
       LANGUAGE: ${{ inputs.language }}
-      CODE: ${{ needs.build.outputs.code }}
       ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -271,11 +268,12 @@ jobs:
           {
             echo "| Publisher | Result |"
             echo "|---|---|"
+            echo "| Build | ${{ needs.build.result }} |"
             echo "| Hugging Face | ${{ needs['publish-hf'].result }} |"
             echo "| Kaggle | ${{ needs['publish-kaggle'].result }} |"
             echo "| Zenodo | ${{ needs['publish-zenodo'].result }} |"
           } >> "$GITHUB_STEP_SUMMARY"
-          if [[ "${{ needs['publish-hf'].result }}" != success || "${{ needs['publish-kaggle'].result }}" != success || "${{ needs['publish-zenodo'].result }}" != success ]]; then
+          if [[ "${{ needs.build.result }}" != success || "${{ needs['publish-hf'].result }}" != success || "${{ needs['publish-kaggle'].result }}" != success || "${{ needs['publish-zenodo'].result }}" != success ]]; then
             echo "::error::One or more publishers failed; the build bundle artifact is retained for retry"
             exit 1
           fi

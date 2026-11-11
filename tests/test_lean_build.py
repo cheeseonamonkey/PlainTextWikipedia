@@ -1,9 +1,9 @@
 import gzip
 import json
 import math
+from pathlib import Path
 import tempfile
 import unittest
-from pathlib import Path
 
 import pyarrow.parquet as pq
 from scripts.article_features import build

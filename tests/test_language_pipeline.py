@@ -1,6 +1,7 @@
 """All active releases share one build workflow; publishers are independent."""
 import unittest
 from pathlib import Path
+
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1] / '.github/workflows'
@@ -62,9 +63,9 @@ class LanguagePipelineTests(unittest.TestCase):
                 if uses.startswith('./.github/workflows/'):
                     self.assertTrue((ROOT / Path(uses).name).exists(), uses)
 
-    def test_all_publish_entries_require_explicit_opt_in(self):
-        # publish now defaults to true for the single-language workflow (the
-        # user's workflow intent); every other workflow must stay build-only.
+    def test_other_workflows_stay_build_only(self):
+        # publish defaults to true only for the single-language workflow;
+        # every other workflow must stay build-only.
         for file in ROOT.glob('*.yml'):
             events = workflow(file.name).get('on', {})
             for trigger in ('workflow_dispatch', 'workflow_call'):

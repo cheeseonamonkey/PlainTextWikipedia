@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 import yaml
-from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi, hf_hub_download
 
 from scripts.bundle_artifacts import file_metadata, verify_bundle
 from scripts.wiki_metadata import resolve_language

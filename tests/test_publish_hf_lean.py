@@ -25,4 +25,4 @@ class PublishHfTests(unittest.TestCase):
             def download(repo, name, **kwargs): return str(folder / name)
             with patch('scripts.publish_hf.verify_bundle', return_value=manifest), \
                  patch('scripts.publish_hf.hf_hub_download', side_effect=download):
-                publish_hf(Api(), 'ffatty/test', folder)
+                publish_hf(Api(), 'ffatty/test', folder)  # type: ignore[arg-type]

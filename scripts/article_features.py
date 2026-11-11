@@ -32,14 +32,14 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from scripts.article_parquet import VERSION, ARTICLE_FIELDS, GROUPED_KEYS
-    from scripts.lexical_features import fold, tokens, LexicalNormalizer, MAX_DF_RATIO
+    from scripts.article_parquet import ARTICLE_FIELDS, GROUPED_KEYS, VERSION
+    from scripts.lexical_features import MAX_DF_RATIO, LexicalNormalizer, tokens
     from scripts.repack_shards import records
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
-    from article_parquet import VERSION, ARTICLE_FIELDS, GROUPED_KEYS
-    from lexical_features import fold, tokens, LexicalNormalizer, MAX_DF_RATIO
+    from article_parquet import ARTICLE_FIELDS, GROUPED_KEYS, VERSION
+    from lexical_features import MAX_DF_RATIO, LexicalNormalizer, tokens
     from repack_shards import records
 
 VOCAB_SIZE = 12_000
@@ -166,7 +166,8 @@ def vocabulary(db, documents, limit, df_cap=MAX_DF_RATIO):
     cap = max(1, documents * df_cap) if df_cap is not None else documents + 1
     ordered = db.execute("SELECT term,tf,df FROM lexical_terms WHERE df <= ? ORDER BY tf DESC, term LIMIT ?",
                          (cap, limit))
-    return [dict(term=term, tf=tf, df=df, idf=idf(documents, df)) for term, tf, df in ordered]
+    return [{"term": term, "tf": tf, "df": df, "idf": idf(documents, df)}
+            for term, tf, df in ordered]
 
 
 def prepare_training(candidate, destination, vocabulary):
@@ -211,7 +212,7 @@ def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
     return fasttext.load_model(str(dest))
 
 
-def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
+def metrics_for_article(row, vocabulary_lookup, stopwords,
                         model, normalizer, dim: int = FASTTEXT_DIMS):
     title, url, body = row["title"], row["article_url"], row["text"]
     blob, length, chars, sentences = (row[key] for key in
@@ -269,18 +270,18 @@ def metrics_for_article(row, vocabulary_lookup, stopwords, docs, avglen,
         "idf_std": math.sqrt(sum(n * (vocabulary_lookup[t]["idf"] - mean_idf) ** 2
                                  for t, n in known.items()) / max(1, known_count)),
     }
-    return dict(
-        title=title, article_url=url, char_count=chars,
-        counts=compact(counts_cell),
-        ratios=compact(ratios_cell),
-        diversity=compact(diversity_cell),
-        tfidf_stats=compact(tfidf_stats_cell),
-        word_counts=compact(counts),
-        tfidf=compact({t: v / l2 for t, v in weighted.items()}) if l2 else "{}",
-        keywords=compact(dict(top)),
-        fasttext=vector,
-        source=compact({"file": row["source_file"], "ordinal": row["source_ordinal"]}),
-    )
+    return {
+        "title": title, "article_url": url, "char_count": chars,
+        "counts": compact(counts_cell),
+        "ratios": compact(ratios_cell),
+        "diversity": compact(diversity_cell),
+        "tfidf_stats": compact(tfidf_stats_cell),
+        "word_counts": compact(counts),
+        "tfidf": compact({t: v / l2 for t, v in weighted.items()}) if l2 else "{}",
+        "keywords": compact(dict(top)),
+        "fasttext": vector,
+        "source": compact({"file": row["source_file"], "ordinal": row["source_ordinal"]}),
+    }
 
 
 def flat_metrics(metrics: dict) -> dict:
@@ -357,7 +358,6 @@ def build(files: list[Path], output: Path, code: str, *,
                 cur = article_rows(db, text_path)
                 for row in cur:
                     result = metrics_for_article(row, lookup, stopwords,
-                                                 totals["articles"], avglen,
                                                  model, normalizer, dim=dim)
                     if set(result) != set(ARTICLE_FIELDS):
                         raise RuntimeError("Article-feature schema mismatch")

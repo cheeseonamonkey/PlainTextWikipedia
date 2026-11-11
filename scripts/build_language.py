@@ -125,6 +125,11 @@ def main():
                 result = inspect(code + 'wiki', counts.pop(), sources_dir)
                 if not result['complete']:
                     raise ValueError('Incomplete source coverage; nothing will be built')
+                # inspect() writes build-manifest.json into the temp staging dir.
+                # Mirror it back into the caller's sources dir so the workflow's
+                # sources artifact (and the later --sources-dir HF publish) carries
+                # the manifest alongside the rebuilt shards.
+                shutil.copy2(sources_dir / 'build-manifest.json', args.sources / 'build-manifest.json')
             files = sorted(p for p in sources_dir.iterdir() if p.name.endswith('.txt.gz'))
         else:
             # Download sources from the existing HF dataset repository.

@@ -21,11 +21,11 @@ The 13-column article schema and every computation are specified in
 
 - **One workflow:** [Build Wikipedia language dataset](.github/workflows/wikipedia.yml).
   Dispatch it with `language: en` (or `zh`, `es`, `simple`, `enwiki`, …).
-  Build-only is the default; the verified bundle is retained as an artifact.
-- **Publish:** set `publish: true` to push the verified bundle to Hugging Face,
-  Kaggle and Zenodo. Each publisher runs as an independent parallel job — one
+  Publishing is the default: the verified bundle goes to Hugging Face, Kaggle
+  and Zenodo. Each publisher runs as an independent parallel job — one
   failing never cancels or blocks the others, and the summary job reports all
-  three outcomes.
+  outcomes. Set `publish: false` for a build-only run; the verified bundle is
+  then retained as an artifact instead.
 - **Fresh dump:** set `rebuild: true` to convert current Wikimedia dumps instead
   of reusing the dataset's published source shards (also used automatically when
   existing sources are missing or unverifiable).

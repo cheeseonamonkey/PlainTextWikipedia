@@ -34,7 +34,7 @@ def file_metadata(path):
         while chunk := stream.read(8 * 1024 * 1024):
             sha.update(chunk)
             md5.update(chunk)
-    return dict(bytes=path.stat().st_size, sha256=sha.hexdigest(), md5=md5.hexdigest())
+    return {"bytes": path.stat().st_size, "sha256": sha.hexdigest(), "md5": md5.hexdigest()}
 
 
 def link_or_copy(source, destination):
@@ -135,6 +135,16 @@ def _verify_sample(parquet, rows=64, dims=FASTTEXT_DIMS):
             json.loads(row[cell])  # must parse
 
 
+def _complete_tree(prefix: str, groups: dict) -> bool:
+    """A recovery tree is complete when every split has both children and no
+    leaf coexists with its own fragments (which would double-count content)."""
+    if prefix in groups:
+        return not any(other != prefix and other.startswith(prefix) for other in groups)
+    if not any(other.startswith(prefix) for other in groups):
+        return False
+    return _complete_tree(prefix + 'a', groups) and _complete_tree(prefix + 'b', groups)
+
+
 def _manifest_roots(manifest: dict) -> list[dict] | None:
     roots = manifest.get('roots')
     if not isinstance(roots, list) or not roots:
@@ -175,19 +185,18 @@ def validate_manifest(manifest: dict, language: str) -> tuple[str, int]:
             if not isinstance(files, list) or not files:
                 raise ValueError('Incomplete source root')
             groups = {}
+            leaf = re.compile(rf'{re.escape(language)}wiki_(\d{{2}})([ab]*)_of_(\d{{2}})'
+                              r'(?:_part(\d{2})_of_(\d{2}))?\.txt\.gz')
             for name in files:
                 if (not isinstance(name, str) or not LEAF_RE.fullmatch(name)
                         or name in names or not name.startswith(language + 'wiki_')):
                     raise ValueError('Unexpected source archive name')
-                match = re.fullmatch(rf'{re.escape(language)}wiki_(\d{{2}})[ab]*_of_(\d{{2}})(?:_part(\d{{2}})_of_(\d{{2}}))?\.txt\.gz', name)
-                if (not match or int(match[1]) != root['root_shard']
-                        or int(match[2]) != count
-                        or (match[3] is not None and not 1 <= int(match[3]) <= int(match[4]))):
+                match = leaf.fullmatch(name)
+                if (match is None or int(match[1]) != root['root_shard']
+                        or int(match[3]) != count
+                        or (match[4] is not None and not 1 <= int(match[4]) <= int(match[5]))):
                     raise ValueError('Inconsistent source archive identity')
-                details = re.fullmatch(rf'{re.escape(language)}wiki_\d{{2}}([ab]*)_of_\d{{2}}(?:_part(\d{{2}})_of_(\d{{2}}))?\.txt\.gz', name)
-                if details is None:
-                    raise ValueError('Unexpected source archive name')
-                segment, part, total = details.groups()
+                segment, part, total = match[2], match[4], match[5]
                 groups.setdefault(segment, []).append((int(part), int(total)) if part else None)
                 names.add(name)
             for parts in groups.values():
@@ -198,13 +207,7 @@ def validate_manifest(manifest: dict, language: str) -> tuple[str, int]:
                 totals = {p[1] for p in parts}
                 if len(totals) != 1 or {p[0] for p in parts} != set(range(1, next(iter(totals)) + 1)) or len(parts) != next(iter(totals)):
                     raise ValueError('Incomplete or inconsistent source parts')
-            def complete_tree(prefix):
-                if prefix in groups:
-                    return not any(s != prefix and s.startswith(prefix) for s in groups)
-                if not any(s.startswith(prefix) for s in groups):
-                    return False
-                return complete_tree(prefix + 'a') and complete_tree(prefix + 'b')
-            if not complete_tree(''):
+            if not _complete_tree('', groups):
                 raise ValueError('Incomplete or overlapping source recovery tree')
         if indices != set(range(1, count + 1)):
             raise ValueError('Source roots are not contiguous')
@@ -237,6 +240,8 @@ def verify_sources(folder: Path, language: str) -> tuple[str, int]:
     fmt, expected = validate_manifest(manifest, language)
 
     staged = sorted(p.name for p in folder.iterdir() if p.name.endswith('.txt.gz'))
+    if not staged:
+        raise ValueError('No source archives staged')
     pattern = re.compile(rf'{re.escape(language)}wiki_(\d{{2}})[ab]*_of_(\d{{2}})(?:_part(\d{{2}})_of_(\d{{2}}))?\.txt\.gz')
     indices = set()
     for name in staged:
@@ -248,8 +253,6 @@ def verify_sources(folder: Path, language: str) -> tuple[str, int]:
         indices.add(int(match[1]))
     if indices != set(range(1, expected + 1)):
         raise ValueError('Missing source roots')
-    if not staged:
-        raise ValueError('No source archives staged')
 
     if fmt == 'roots':
         declared = {name for root in manifest['roots'] for name in root['files']}

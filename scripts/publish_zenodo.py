@@ -182,7 +182,7 @@ def main():
     parser.add_argument("--language", required=True)
     parser.add_argument("--folder", type=Path, default=Path("release"))
     args = parser.parse_args()
-    repo, project, code = resolve_language(args.language)
+    repo, project, _code = resolve_language(args.language)
     zenodo_publish(args.folder, project.removesuffix("wiki"), repo)
 
 
