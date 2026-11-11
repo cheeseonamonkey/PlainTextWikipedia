@@ -42,6 +42,13 @@ except ModuleNotFoundError as exc:
     from lexical_features import MAX_DF_RATIO, LexicalNormalizer, tokens
     from repack_shards import records
 
+# fastText is vendored as a prebuilt extension (fasttext_pybind.cpython-312-*
+# .so) plus its thin Python package under vendor/fasttext/, so build/runtime
+# never depend on pip resolving fasttext-wheel -> pybind11.
+_VENDOR_FASTTEXT = Path(__file__).resolve().parents[1] / "vendor" / "fasttext"
+if _VENDOR_FASTTEXT.is_dir() and str(_VENDOR_FASTTEXT) not in sys.path:
+    sys.path.insert(0, str(_VENDOR_FASTTEXT))
+
 VOCAB_SIZE = 12_000
 FASTTEXT_DIMS = 180
 FASTTEXT_WINDOW = 8
