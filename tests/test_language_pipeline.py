@@ -30,6 +30,20 @@ class LanguagePipelineTests(unittest.TestCase):
         self.assertIn('-m scripts.build_language', script)
         self.assertNotIn('wikipedia_bundle', script)
 
+    def test_sources_are_staged_before_build_for_both_modes(self):
+        jobs = workflow('wikipedia.yml')['jobs']
+        stage, build = jobs['stage'], jobs['build']
+        self.assertEqual(stage['needs'], ['resolve', 'rebuild'])
+        self.assertIn('needs.rebuild.result', stage['if'])
+        self.assertIn('--stage-only sources', str(stage['steps']))
+        self.assertIn('full-${{ needs.resolve.outputs.project }}-*', str(stage['steps']))
+        self.assertIn('staged-sources-${{ needs.resolve.outputs.code }}', str(stage['steps']))
+        self.assertEqual(build['needs'], ['resolve', 'stage'])
+        self.assertIn("needs.stage.result == 'success'", build['if'])
+        self.assertIn('staged-sources-${{ needs.resolve.outputs.code }}', str(build['steps']))
+        self.assertIn('--sources sources', str(build['steps']))
+        self.assertIn('sources/build-manifest.json', str(build['steps']))
+
     def test_publishers_are_parallel_independent_jobs(self):
         single = workflow('wikipedia.yml')
         for name in ('publish-hf', 'publish-kaggle', 'publish-zenodo'):

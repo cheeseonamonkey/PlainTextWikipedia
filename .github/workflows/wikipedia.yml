@@ -109,9 +109,43 @@ jobs:
       language: ${{ needs.resolve.outputs.project }}
     secrets: inherit
 
-  build:
+  stage:
     needs: [resolve, rebuild]
-    if: always() && needs.resolve.result == 'success' && (needs.resolve.outputs.mode != 'rebuild' || needs.rebuild.result == 'success')
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && (needs.resolve.outputs.mode != 'rebuild' || needs.rebuild.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      LANGUAGE: ${{ inputs.language }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
+      - name: Download existing sources
+        if: needs.resolve.outputs.mode == 'existing'
+        run: python -m scripts.build_language --language "$LANGUAGE" --stage-only sources
+      - name: Collect converted source artifacts (fresh rebuild)
+        if: needs.resolve.outputs.mode == 'rebuild'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: full-${{ needs.resolve.outputs.project }}-*
+          merge-multiple: true
+          path: sources
+      - name: Retain staged sources for build
+        uses: actions/upload-artifact@v4
+        with:
+          name: staged-sources-${{ needs.resolve.outputs.code }}
+          path: sources/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    needs: [resolve, stage]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.stage.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     outputs:
@@ -133,19 +167,16 @@ jobs:
           python-version: '3.12'
       - name: Install CPU dependencies
         run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
-      - name: Collect converted source artifacts (fresh rebuild)
-        if: needs.resolve.outputs.mode == 'rebuild'
+      - name: Download staged sources
         uses: actions/download-artifact@v4
         with:
-          pattern: full-${{ needs.resolve.outputs.project }}-*
-          merge-multiple: true
+          name: staged-sources-${{ needs.resolve.outputs.code }}
           path: sources
       - name: Build and verify parquet bundle
         shell: bash
         run: |
           set -euo pipefail
-          args=(--language "$LANGUAGE" --output release --vocab "$VOCAB" --dim "$DIM" --window "$WINDOW" --epoch "$EPOCH")
-          if [[ -d sources ]]; then args+=(--sources sources); fi
+          args=(--language "$LANGUAGE" --sources sources --output release --vocab "$VOCAB" --dim "$DIM" --window "$WINDOW" --epoch "$EPOCH")
           python -m scripts.build_language "${args[@]}"
       - name: Retain verified bundle for inspection
         uses: actions/upload-artifact@v4

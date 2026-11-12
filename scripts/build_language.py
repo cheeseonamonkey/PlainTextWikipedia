@@ -90,7 +90,8 @@ def make_bundle(files: list[Path], output: Path, code: str, *,
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--language", required=True, help="language prefix, e.g. en, zh, es")
-    p.add_argument("--sources", type=Path, help="directory of converted source shards (fresh dump)")
+    p.add_argument("--sources", type=Path, help="directory of staged source shards")
+    p.add_argument("--stage-only", type=Path, help="download existing HF sources to this empty directory and exit")
     p.add_argument("--output", type=Path, default=Path("release"))
     p.add_argument("--vocab", type=int, default=12000)
     p.add_argument("--dim", type=int, default=180)
@@ -100,6 +101,16 @@ def main():
     args = p.parse_args()
 
     repo, _project, code = resolve_language(args.language)
+    if args.stage_only:
+        if args.sources:
+            p.error('--stage-only cannot be combined with --sources')
+        args.stage_only.mkdir(parents=True, exist_ok=True)
+        if any(args.stage_only.iterdir()):
+            raise FileExistsError(f'Source directory not empty: {args.stage_only}')
+        api = HfApi(token=os.getenv('HF_TOKEN') or None)
+        source_archives(api, repo, args.stage_only)
+        verify_sources(args.stage_only, code)
+        return
     if args.output.exists() and any(args.output.iterdir()):
         raise FileExistsError(f"Release directory not empty: {args.output}")
 
