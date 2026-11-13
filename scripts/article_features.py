@@ -5,7 +5,16 @@ Stream each source once into a temporary corpus index plus one combined plaintex
 spill file, fit a shared stemmed vocabulary, train a lightweight fastText model,
 and emit one enriched ``articles.parquet`` plus ``corpus-profile.json``.
 
-Outputs only those two artifacts (plus a small manifest). No SQLite, no zip
+The work is three stages over one explicit intermediate directory, so a stage can
+run in its own process (and its own CI job) with its own time budget. In order:
+``stage_corpus_stats`` reads the sources and writes ``work/corpus-stats``;
+``stage_fasttext_training`` reads that and writes ``work/fasttext-training``;
+``stage_enrich_parquet`` reads both and writes the release. ``build()`` runs all
+three in one process. Each stage reads only its declared inputs and writes only
+its declared outputs, so a failed run resumes at the stage that failed instead
+of restarting the whole build.
+
+Outputs only the release artifacts (plus a small manifest). No SQLite, no zip
 archives, no text .xz re-copy, no Bekko, no BM25 are published.
 """
 from __future__ import annotations
@@ -32,13 +41,25 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from scripts.article_parquet import ARTICLE_FIELDS, GROUPED_KEYS, VERSION
+    from scripts.article_parquet import (
+        ARTICLE_FIELDS,
+        GROUPED_KEYS,
+        VERSION,
+        ArticleParquet,
+        CorpusProfile,
+    )
     from scripts.lexical_features import MAX_DF_RATIO, LexicalNormalizer, tokens
     from scripts.repack_shards import records
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
-    from article_parquet import ARTICLE_FIELDS, GROUPED_KEYS, VERSION
+    from article_parquet import (
+        ARTICLE_FIELDS,
+        GROUPED_KEYS,
+        VERSION,
+        ArticleParquet,
+        CorpusProfile,
+    )
     from lexical_features import MAX_DF_RATIO, LexicalNormalizer, tokens
     from repack_shards import records
 
@@ -57,6 +78,46 @@ FASTTEXT_LR = 0.05
 FASTTEXT_EPOCH = 1
 KEYWORD_COUNT = 15
 SENTENCES = re.compile(r"(?<=[.!?。！？])\s+|(?<=[。！？])")
+
+# --- Split stages ----------------------------------------------------------
+# The build runs as three stages over one explicit intermediate directory, so a
+# stage can run in its own process (and its own CI job) with its own time
+# budget. Each stage reads only its declared inputs and writes only its declared
+# outputs:
+#
+#   corpus-stats/       index.sqlite + articles-spill.txt.xz +
+#                       lexical-training.txt.gz + stats.json
+#   fasttext-training/  training.txt (removed after training) + model.bin +
+#                       training.json
+#   enrich-parquet/     articles.parquet + corpus-profile.json + manifest.json
+#
+# corpus-stats reads the source archives; fasttext-training reads stats.json and
+# the training candidate; enrich-parquet reads the index, the spill and the
+# model, and publishes the release.
+CORPUS_STATS_DIR = "corpus-stats"
+TRAINING_DIR = "fasttext-training"
+ENRICH_DIR = "enrich-parquet"
+INDEX_NAME = "index.sqlite"
+SPILL_NAME = "articles-spill.txt.xz"
+CANDIDATE_NAME = "lexical-training.txt.gz"
+STATS_NAME = "stats.json"
+TRAINING_NAME = "training.txt"
+MODEL_NAME = "model.bin"
+TRAINING_META_NAME = "training.json"
+STAGES = (CORPUS_STATS_DIR, TRAINING_DIR, ENRICH_DIR)
+
+
+def stage_file(work: Path, stage: str, name: str) -> Path:
+    return Path(work) / stage / name
+
+
+def read_stage_json(path: Path) -> dict:
+    if not path.is_file():
+        raise ValueError(f"Missing stage artifact: {path}; run the earlier stage first")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Malformed stage artifact: {path}")
+    return data
 
 
 def compact(obj) -> str:
@@ -80,6 +141,15 @@ def source_articles(files: list[Path]):
         for ordinal, record in enumerate(records(file), start=1):
             raw_title, raw_text, _ = record.split(b"\n", 2)
             yield file.name, ordinal, raw_title.decode("utf-8").rstrip("\r"), raw_text.decode("utf-8").rstrip("\r")
+
+
+def connect_database(path: Path):
+    """Open an existing index for reading (no schema creation)."""
+    if not Path(path).is_file():
+        raise ValueError(f"Missing stage artifact: {path}; run the corpus-stats stage first")
+    db = sqlite3.connect(path)
+    db.row_factory = sqlite3.Row
+    return db
 
 
 def open_database(path: Path):
@@ -169,7 +239,7 @@ def article_rows(db, text_path):
         yield {**dict(row), "text": record[3]}
 
 
-def vocabulary(db, documents, limit, df_cap=MAX_DF_RATIO):
+def vocabulary(db, documents, limit, df_cap: float | None = MAX_DF_RATIO):
     cap = max(1, documents * df_cap) if df_cap is not None else documents + 1
     ordered = db.execute("SELECT term,tf,df FROM lexical_terms WHERE df <= ? ORDER BY tf DESC, term LIMIT ?",
                          (cap, limit))
@@ -204,7 +274,7 @@ def train_fasttext_worker(inp: Path, model_path: Path, dim: int, window: int,
 def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
                    dim: int = FASTTEXT_DIMS, window: int = FASTTEXT_WINDOW,
                    epoch: int = FASTTEXT_EPOCH, threads: int = 4,
-                   timeout: int = 0):
+                   timeout: int = 0, load_model: bool = True):
     if train_tokens < 1:
         raise ValueError("No tokenized text is available to train fastText")
     command = [sys.executable, str(Path(__file__).resolve()), "_train",
@@ -215,6 +285,10 @@ def train_fasttext(training: Path, dest: Path, train_tokens: int, *,
     except subprocess.CalledProcessError as exc:
         details = (exc.stderr or b"").decode("utf-8", errors="replace")[-2000:]
         raise RuntimeError(f"fastText training failed: {details}") from exc
+    if not load_model:
+        # The training stage runs in its own process; the embedding is loaded by
+        # the enrich stage instead of being paid for twice.
+        return None
     import fasttext
     return fasttext.load_model(str(dest))
 
@@ -300,11 +374,11 @@ def flat_metrics(metrics: dict) -> dict:
     return out
 
 
-def build(files: list[Path], output: Path, code: str, *,
-          vocab_size: int = VOCAB_SIZE,
-          dim: int = FASTTEXT_DIMS, window: int = FASTTEXT_WINDOW,
-          epoch: int = FASTTEXT_EPOCH,
-          timeout: int = 0, threads: int = 4) -> dict:
+def validate_request(files: list[Path], code: str, *,
+                     vocab_size: int = VOCAB_SIZE,
+                     dim: int = FASTTEXT_DIMS, window: int = FASTTEXT_WINDOW,
+                     epoch: int = FASTTEXT_EPOCH,
+                     timeout: int = 0, threads: int = 4) -> None:
     if not files or len({p.resolve() for p in files}) != len(files):
         raise ValueError("Provide distinct source archives")
     if any(not p.is_file() or not p.name.endswith((".txt.gz", ".txt.xz")) for p in files):
@@ -315,105 +389,179 @@ def build(files: list[Path], output: Path, code: str, *,
         raise ValueError("Expected a Wikimedia language code")
     if threads < 1 or timeout < 0 or dim < 1 or window < 1 or epoch < 1:
         raise ValueError("Require positive dimensions, window, epoch and threads, and a nonnegative timeout")
-    output.mkdir(parents=True, exist_ok=True)
+
+
+def ensure_capacity(files: list[Path], *folders: Path) -> None:
+    """Fail before the first byte is written when the disk cannot hold the build."""
     required = sum(p.stat().st_size for p in files) * 1.2
-    available = shutil.disk_usage(output).free
-    if available < required:
-        raise RuntimeError(f"Insufficient disk for the build: need ~{required / 1e9:.1f} GB "
-                           f"free at {output}, found {available / 1e9:.1f} GB")
+    for folder in folders:
+        available = shutil.disk_usage(folder).free
+        if available < required:
+            raise RuntimeError(f"Insufficient disk for the build: need ~{required / 1e9:.1f} GB "
+                               f"free at {folder}, found {available / 1e9:.1f} GB")
+
+
+def stage_corpus_stats(files: list[Path], work: Path, code: str, *,
+                       vocab_size: int = VOCAB_SIZE) -> dict:
+    """Stage 1: one streaming pass over the sources.
+
+    Writes the article index, the combined plaintext spill used later to recover
+    bodies, the vocabulary-filtered fastText training candidate, and stats.json.
+    """
+    work = Path(work)
+    stage = work / CORPUS_STATS_DIR
+    stage.mkdir(parents=True, exist_ok=True)
+    database = stage_file(work, CORPUS_STATS_DIR, INDEX_NAME)
+    candidate = stage_file(work, CORPUS_STATS_DIR, CANDIDATE_NAME)
+    text_path = stage_file(work, CORPUS_STATS_DIR, SPILL_NAME)
+    normalizer = LexicalNormalizer(code)
+    db = open_database(database)
+    try:
+        totals = ingest(sorted(files), db, candidate, code, normalizer, text_output=text_path)
+        print(f"Indexed {totals['articles']:,} articles; fitting shared vocabulary", flush=True)
+        capped = True
+        entries = vocabulary(db, totals["articles"], vocab_size)
+        if not entries:
+            # Tiny corpora (few, similar articles) can place every eligible term
+            # above the DF cap. Keep such editions buildable by lifting the cap
+            # rather than failing; the vocabulary remains honest.
+            print("::warning::Vocabulary empty under the DF cap; refitting without it", flush=True)
+            entries = vocabulary(db, totals["articles"], vocab_size, df_cap=None)
+            capped = False
+        extra_stopwords = sorted(term for (term,) in db.execute(
+            "SELECT term FROM terms WHERE df > ?", (totals["articles"] * MAX_DF_RATIO,)))
+    finally:
+        db.close()
+    stats = {
+        "version": VERSION, "language": code,
+        "documents": totals["articles"], "raw_tokens": totals["tokens"],
+        "average_document_tokens": totals["tokens"] / totals["articles"],
+        "raw_vocabulary": totals["raw_vocabulary"],
+        "vocabulary_size": len(entries), "vocabulary": entries,
+        "extra_stopwords": extra_stopwords, "df_cap_applied": capped,
+        "lexical": {**normalizer.config(), "vocabulary_limit": vocab_size,
+                    "idf": "ln((N+1)/(df+1))+1",
+                    "tfidf": "per-article L2-normalized stemmed TF-IDF",
+                    "keywords": KEYWORD_COUNT,
+                    "word_counts": "raw article counts"},
+    }
+    stage_file(work, CORPUS_STATS_DIR, STATS_NAME).write_text(
+        json.dumps(stats, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n",
+        encoding="utf-8")
+    return stats
+
+
+def stage_fasttext_training(work: Path, *,
+                            dim: int = FASTTEXT_DIMS, window: int = FASTTEXT_WINDOW,
+                            epoch: int = FASTTEXT_EPOCH, threads: int = 4,
+                            timeout: int = 0) -> dict:
+    """Stage 2: restrict the training text to the shared vocabulary and train."""
+    work = Path(work)
+    stats = read_stage_json(stage_file(work, CORPUS_STATS_DIR, STATS_NAME))
+    lookup = {entry["term"]: entry for entry in stats["vocabulary"]}
+    candidate = stage_file(work, CORPUS_STATS_DIR, CANDIDATE_NAME)
+    if not candidate.is_file():
+        raise ValueError(f"Missing stage artifact: {candidate}; run the corpus-stats stage first")
+    stage = work / TRAINING_DIR
+    stage.mkdir(parents=True, exist_ok=True)
+    training = stage_file(work, TRAINING_DIR, TRAINING_NAME)
+    tokens = prepare_training(candidate, training, lookup)
+    print(f"Training fastText: {len(lookup):,} terms, {tokens:,} tokens", flush=True)
+    model_path = stage_file(work, TRAINING_DIR, MODEL_NAME)
+    train_fasttext(training, model_path, tokens, dim=dim, window=window,
+                   epoch=epoch, timeout=timeout, threads=threads, load_model=False)
+    training.unlink(missing_ok=True)
+    meta = {"dim": dim, "algorithm": "cbow", "epoch": epoch, "window": window,
+            "negative": FASTTEXT_NEG, "lr": FASTTEXT_LR, "subword_bucket": 0,
+            "training_tokens": tokens,
+            "training": "every article, restricted to the shared top-N stemmed vocabulary",
+            "timeout_seconds": timeout or None}
+    stage_file(work, TRAINING_DIR, TRAINING_META_NAME).write_text(
+        json.dumps(meta, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")
+    return meta
+
+
+def stage_enrich_parquet(work: Path, output: Path, code: str) -> dict:
+    """Stage 3: embed every article, then write and publish the release bundle."""
+    work, output = Path(work), Path(output)
+    stats = read_stage_json(stage_file(work, CORPUS_STATS_DIR, STATS_NAME))
+    meta = read_stage_json(stage_file(work, TRAINING_DIR, TRAINING_META_NAME))
+    database = stage_file(work, CORPUS_STATS_DIR, INDEX_NAME)
+    text_path = stage_file(work, CORPUS_STATS_DIR, SPILL_NAME)
+    model_path = stage_file(work, TRAINING_DIR, MODEL_NAME)
+    if not model_path.is_file():
+        raise ValueError(f"Missing stage artifact: {model_path}; run the fasttext-training stage first")
+    documents = stats["documents"]
+    dim = meta["dim"]
+    lookup = {entry["term"]: entry for entry in stats["vocabulary"]}
+    normalizer = LexicalNormalizer(code)
+    stopwords = set(normalizer.stopwords).union(stats["extra_stopwords"])
+    import fasttext
+    model = fasttext.load_model(str(model_path))
+    stage = work / ENRICH_DIR
+    stage.mkdir(parents=True, exist_ok=True)
+    article_path = stage / "articles.parquet"
+    profile = CorpusProfile()
+    db = connect_database(database)
+    parquet = ArticleParquet(article_path, ARTICLE_FIELDS)
+    try:
+        for row in article_rows(db, text_path):
+            result = metrics_for_article(row, lookup, stopwords, model, normalizer, dim=dim)
+            if set(result) != set(ARTICLE_FIELDS):
+                raise RuntimeError("Article-feature schema mismatch")
+            parquet.add(row["text"], result)
+            profile.add(flat_metrics(result))
+            if parquet.count % 1024 == 0 or parquet.count == documents:
+                print(f"Embedded {parquet.count}/{documents} articles", flush=True)
+    finally:
+        parquet.close()
+        db.close()
+    if parquet.count != documents:
+        raise RuntimeError("Parquet article row-count mismatch")
+    profile_path = stage / "corpus-profile.json"
+    profile_data = profile.export()
+    profile_data["vocabulary"] = stats["vocabulary"]
+    profile_path.write_text(json.dumps(profile_data, ensure_ascii=False, allow_nan=False,
+                                       separators=(",", ":")) + "\n", encoding="utf-8")
+    report = {
+        "version": VERSION, "language": code,
+        "documents": documents, "raw_tokens": stats["raw_tokens"],
+        "average_document_tokens": stats["average_document_tokens"],
+        "raw_vocabulary": stats["raw_vocabulary"],
+        "vocabulary_size": stats["vocabulary_size"],
+        "fasttext": meta,
+        "primary_table": "articles.parquet",
+        "corpus_profile": "corpus-profile.json",
+        "lexical": stats["lexical"],
+        "files": {},
+    }
+    for name, file in (("articles.parquet", article_path),
+                       ("corpus-profile.json", profile_path)):
+        report["files"][name] = {"bytes": file.stat().st_size, "sha256": sha256(file)}
+    manifest = stage / "manifest.json"
+    manifest.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                        encoding="utf-8")
+    publish(stage, output)
+    return report
+
+
+def build(files: list[Path], output: Path, code: str, *,
+          vocab_size: int = VOCAB_SIZE,
+          dim: int = FASTTEXT_DIMS, window: int = FASTTEXT_WINDOW,
+          epoch: int = FASTTEXT_EPOCH,
+          timeout: int = 0, threads: int = 4) -> dict:
+    """Run all three stages into one explicit work directory (single process)."""
+    validate_request(files, code, vocab_size=vocab_size, dim=dim, window=window,
+                     epoch=epoch, threads=threads, timeout=timeout)
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    ensure_capacity(files, output)
     with tempfile.TemporaryDirectory(prefix=".features-", dir=output) as work:
-        stage = Path(work)
-        database = stage / "articles.sqlite"
-        training = stage / "fasttext-training.txt"
-        candidate = stage / "lexical-training.txt.gz"
-        normalizer = LexicalNormalizer(code)
-        model_path = stage / "fasttext.bin"
-        db = open_database(database)
-        try:
-            text_path = stage / "articles-spill.txt.xz"
-            totals = ingest(sorted(files), db, candidate, code, normalizer,
-                            text_output=text_path)
-            print(f"Indexed {totals['articles']:,} articles; fitting shared vocabulary", flush=True)
-            entries = vocabulary(db, totals["articles"], vocab_size)
-            if not entries:
-                # Tiny corpora (few, similar articles) can place every eligible
-                # term above the DF cap. Keep such editions buildable by lifting
-                # the cap rather than failing; the vocabulary remains honest.
-                print("::warning::Vocabulary empty under the DF cap; refitting without it", flush=True)
-                entries = vocabulary(db, totals["articles"], vocab_size, df_cap=None)
-            lookup = {entry["term"]: entry for entry in entries}
-            stopwords = set(normalizer.stopwords).union(
-                term for (term,) in db.execute(
-                    "SELECT term FROM terms WHERE df > ?", (totals["articles"] * MAX_DF_RATIO,)))
-            totals["train_tokens"] = prepare_training(candidate, training, lookup)
-            print(f"Training fastText: {len(lookup):,} terms, {totals['train_tokens']:,} tokens", flush=True)
-            model = train_fasttext(training, model_path, totals["train_tokens"],
-                                   dim=dim, window=window, epoch=epoch,
-                                   timeout=timeout, threads=threads)
-            training.unlink()
-            avglen = totals["tokens"] / totals["articles"]
-            try:
-                from scripts.article_parquet import ArticleParquet, CorpusProfile
-            except ModuleNotFoundError as exc:
-                if exc.name != "scripts":
-                    raise
-                from article_parquet import ArticleParquet, CorpusProfile
-            profile = CorpusProfile()
-            article_path = stage / "articles.parquet"
-            parquet = ArticleParquet(article_path, ARTICLE_FIELDS)
-            try:
-                cur = article_rows(db, text_path)
-                for row in cur:
-                    result = metrics_for_article(row, lookup, stopwords,
-                                                 model, normalizer, dim=dim)
-                    if set(result) != set(ARTICLE_FIELDS):
-                        raise RuntimeError("Article-feature schema mismatch")
-                    parquet.add(row["text"], result)
-                    profile.add(flat_metrics(result))
-                    if parquet.count % 1024 == 0 or parquet.count == totals["articles"]:
-                        print(f"Embedded {parquet.count}/{totals['articles']} articles", flush=True)
-            finally:
-                parquet.close()
-            if parquet.count != totals["articles"]:
-                raise RuntimeError("Parquet article row-count mismatch")
-            profile_path = stage / "corpus-profile.json"
-            profile_data = profile.export()
-            profile_data["vocabulary"] = entries
-            profile_path.write_text(json.dumps(profile_data, ensure_ascii=False, allow_nan=False,
-                                               separators=(",", ":")) + "\n", encoding="utf-8")
-            db.close()
-            report = {
-                "version": VERSION, "language": code,
-                "documents": totals["articles"], "raw_tokens": totals["tokens"],
-                "average_document_tokens": avglen,
-                "raw_vocabulary": totals["raw_vocabulary"],
-                "vocabulary_size": len(entries),
-                "fasttext": {"dim": dim, "algorithm": "cbow", "epoch": epoch,
-                             "window": window, "negative": FASTTEXT_NEG,
-                             "lr": FASTTEXT_LR, "subword_bucket": 0,
-                             "training_tokens": totals["train_tokens"],
-                             "training": "every article, restricted to the shared top-N stemmed vocabulary",
-                             "timeout_seconds": timeout or None},
-                "primary_table": "articles.parquet",
-                "corpus_profile": "corpus-profile.json",
-                "lexical": {**normalizer.config(), "vocabulary_limit": vocab_size,
-                            "idf": "ln((N+1)/(df+1))+1",
-                            "tfidf": "per-article L2-normalized stemmed TF-IDF",
-                            "keywords": KEYWORD_COUNT,
-                            "word_counts": "raw article counts"},
-                "files": {},
-            }
-            for name, file in (("articles.parquet", article_path),
-                               ("corpus-profile.json", profile_path)):
-                report["files"][name] = {"bytes": file.stat().st_size,
-                                         "sha256": sha256(file)}
-            manifest = stage / "manifest.json"
-            manifest.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
-                                encoding="utf-8")
-            publish(stage, output)
-            return report
-        finally:
-            db.close()
+        workdir = Path(work)
+        stage_corpus_stats(files, workdir, code, vocab_size=vocab_size)
+        stage_fasttext_training(workdir, dim=dim, window=window, epoch=epoch,
+                                threads=threads, timeout=timeout)
+        return stage_enrich_parquet(workdir, output, code)
 
 
 def publish(stage: Path, output: Path):
@@ -423,6 +571,7 @@ def publish(stage: Path, output: Path):
     provide an atomic snapshot to concurrent readers or across process crashes.
     """
     names = ("articles.parquet", "corpus-profile.json", "manifest.json")
+    output.mkdir(parents=True, exist_ok=True)
     backups = stage / "backups"
     backups.mkdir()
     import shutil
@@ -461,11 +610,36 @@ def main():
     p.add_argument("--epoch", type=int, default=FASTTEXT_EPOCH)
     p.add_argument("--fasttext-timeout", type=int, default=0)
     p.add_argument("--threads", type=int, default=4)
+    p.add_argument("--stage", choices=STAGES,
+                   help="run one stage into --work instead of the whole build")
+    p.add_argument("--work", type=Path, help="shared intermediate artifact directory")
+    p.add_argument("--release", type=Path, help="release directory written by the enrich stage")
     args = p.parse_args()
     if args.sources and args.sources[0].name == "_train":
         train_fasttext_worker(Path(args.sources[1]), Path(args.sources[2]),
                               int(str(args.sources[3])), int(str(args.sources[4])),
                               int(str(args.sources[5])), int(str(args.sources[6])))
+        return
+    if args.stage:
+        if not args.work:
+            p.error("--stage requires --work")
+        if args.stage == CORPUS_STATS_DIR:
+            if not args.sources:
+                p.error("The corpus-stats stage requires at least one source .txt.gz")
+            stats = stage_corpus_stats(args.sources, args.work, args.language,
+                                       vocab_size=args.vocab)
+            print(json.dumps({k: v for k, v in stats.items() if k != "vocabulary"},
+                             ensure_ascii=False, indent=2))
+        elif args.stage == TRAINING_DIR:
+            meta = stage_fasttext_training(args.work, dim=args.dim, window=args.window,
+                                           epoch=args.epoch, threads=args.threads,
+                                           timeout=args.fasttext_timeout)
+            print(json.dumps(meta, ensure_ascii=False, indent=2))
+        else:
+            if not args.release:
+                p.error("The enrich-parquet stage requires --release")
+            report = stage_enrich_parquet(args.work, args.release, args.language)
+            print(json.dumps(report, ensure_ascii=False, indent=2))
         return
     if not args.sources:
         p.error("At least one source .txt.gz required")

@@ -31,6 +31,10 @@ The 13-column article schema and every computation are specified in
   existing sources are missing or unverifiable).
 - **Batch:** the workflow accepts `workflow_call`, so a fleet dispatcher can run
   it as a matrix over many languages.
+- **Three sequential stages:** corpus indexing/vocabulary, fastText training,
+  then enrichment into Parquet. Each stage is its own job with its own six-hour
+  budget, and they hand each other explicit intermediate artifacts, so the largest
+  wikis are not forced into a single job.
 
 ## Feature knobs
 

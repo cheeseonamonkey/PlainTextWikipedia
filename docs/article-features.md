@@ -18,6 +18,28 @@ during the build and is deleted; it stores counts and metadata, not another
 plaintext corpus. The embedding pass streams article bodies from the temporary
 spill file and checks them against that index.
 
+## Build stages
+
+The build runs as three stages over one explicit intermediate directory, so each
+stage can run in its own process and its own CI job with its own time budget:
+
+| Stage | Reads | Writes |
+|---|---|---|
+| `corpus-stats` | `data/*.txt.gz` source shards | `corpus-stats/index.sqlite`, `corpus-stats/articles-spill.txt.xz`, `corpus-stats/lexical-training.txt.gz`, `corpus-stats/stats.json` |
+| `fasttext-training` | `corpus-stats/stats.json`, `corpus-stats/lexical-training.txt.gz` | `fasttext-training/model.bin`, `fasttext-training/training.json` |
+| `enrich-parquet` | the corpus index, the spill file, the trained model | `release/articles.parquet`, `release/corpus-profile.json`, `release/manifest.json` |
+
+Each stage reads only its declared inputs and fails with an explicit
+"run the earlier stage first" error when one is missing, so a failed run resumes
+at the failing stage instead of restarting the whole build. `python -m
+scripts.article_features --stage <name> --work <dir>` runs one stage directly;
+`python -m scripts.build_language --language <code> --stage <name>` does the same
+with language resolution and source staging. Omitting `--stage` runs all three
+in one process into a temporary directory under the release folder.
+
+The split reproduces the single-process bundle exactly: same vocabulary, same
+fastText model, byte-identical `manifest.json` and `corpus-profile.json`.
+
 ## Article columns
 
 `text` is the first column; `fasttext` is a native `list<float32>`; every other
@@ -87,3 +109,8 @@ build log says so explicitly.
   scripts.
 - Legacy-manifest languages (most pre-2026-11 datasets) carry only global
   completeness evidence.
+- The `corpus-stats` intermediate (SQLite index + plaintext spill) is the largest
+  artifact the build produces; for full English it is unmeasured and is the main
+  scaling risk of the staged handoff. Each stage also re-installs dependencies
+  and re-downloads its inputs, so the split trades transfer time for per-stage
+  time budgets.

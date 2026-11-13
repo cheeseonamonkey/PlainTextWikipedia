@@ -143,7 +143,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  build:
+  corpus-stats:
     needs: [resolve, stage]
     if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.stage.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -155,9 +155,6 @@ jobs:
     env:
       LANGUAGE: ${{ inputs.language }}
       VOCAB: ${{ inputs.vocab }}
-      DIM: ${{ inputs.dim }}
-      WINDOW: ${{ inputs.window }}
-      EPOCH: ${{ inputs.epoch }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -172,12 +169,107 @@ jobs:
         with:
           name: staged-sources-${{ needs.resolve.outputs.code }}
           path: sources
-      - name: Build and verify parquet bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          args=(--language "$LANGUAGE" --sources sources --output release --vocab "$VOCAB" --dim "$DIM" --window "$WINDOW" --epoch "$EPOCH")
-          python -m scripts.build_language "${args[@]}"
+      - name: Index the corpus and fit the shared vocabulary
+        run: >-
+          python -m scripts.build_language --language "$LANGUAGE" --stage corpus-stats
+          --sources sources --work work --vocab "$VOCAB"
+      - name: Retain the corpus index for training
+        uses: actions/upload-artifact@v4
+        with:
+          name: features-${{ needs.resolve.outputs.code }}-corpus
+          path: work/corpus-stats/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - name: Retain the verified source manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-manifest-${{ needs.resolve.outputs.code }}
+          path: sources/build-manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
+  fasttext-training:
+    needs: corpus-stats
+    if: ${{ !cancelled() && needs.corpus-stats.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      LANGUAGE: ${{ inputs.language }}
+      DIM: ${{ inputs.dim }}
+      WINDOW: ${{ inputs.window }}
+      EPOCH: ${{ inputs.epoch }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU dependencies
+        run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
+      - name: Download the corpus index
+        uses: actions/download-artifact@v4
+        with:
+          name: features-${{ needs.corpus-stats.outputs.code }}-corpus
+          path: work/corpus-stats
+      - name: Train fastText on the shared vocabulary
+        run: >-
+          python -m scripts.build_language --language "$LANGUAGE" --stage fasttext-training
+          --work work --dim "$DIM" --window "$WINDOW" --epoch "$EPOCH"
+      - name: Retain the trained model
+        uses: actions/upload-artifact@v4
+        with:
+          name: features-${{ needs.corpus-stats.outputs.code }}-model
+          path: work/fasttext-training/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  enrich-parquet:
+    needs: [resolve, fasttext-training]
+    if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.fasttext-training.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      code: ${{ needs.resolve.outputs.code }}
+      repo: ${{ needs.resolve.outputs.repo }}
+      mode: ${{ needs.resolve.outputs.mode }}
+    env:
+      LANGUAGE: ${{ inputs.language }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/restore_vendor.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install CPU dependencies
+        run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
+      - name: Download the corpus index
+        uses: actions/download-artifact@v4
+        with:
+          name: features-${{ needs.resolve.outputs.code }}-corpus
+          path: work/corpus-stats
+      - name: Download the trained model
+        uses: actions/download-artifact@v4
+        with:
+          name: features-${{ needs.resolve.outputs.code }}-model
+          path: work/fasttext-training
+      - name: Download converted sources (fresh rebuild only)
+        if: needs.resolve.outputs.mode == 'rebuild'
+        uses: actions/download-artifact@v4
+        with:
+          name: staged-sources-${{ needs.resolve.outputs.code }}
+          path: sources
+      - name: Download the verified source manifest (fresh rebuild only)
+        if: needs.resolve.outputs.mode == 'rebuild'
+        uses: actions/download-artifact@v4
+        with:
+          name: source-manifest-${{ needs.resolve.outputs.code }}
+          path: sources
+      - name: Embed every article and verify the bundle
+        run: >-
+          python -m scripts.build_language --language "$LANGUAGE" --stage enrich-parquet
+          --work work --release release
       - name: Retain verified bundle for inspection
         uses: actions/upload-artifact@v4
         with:
@@ -198,10 +290,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Always runs after build to expose the exact condition values downstream
-  # jobs evaluate; diagnoses skipped-publisher outcomes.
+  # Always runs after the enrich stage to expose the exact condition values
+  # downstream jobs evaluate; diagnoses skipped-publisher outcomes.
   debug:
-    needs: build
+    needs: enrich-parquet
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -210,13 +302,13 @@ jobs:
         shell: bash
         run: |
           echo "inputs.publish = '${{ inputs.publish }}' (type: ${{ inputs.publish && 'truthy' || 'falsy' }})"
-          echo "needs.build.result = '${{ needs.build.result }}'"
+          echo "needs.enrich-parquet.result = '${{ needs.enrich-parquet.result }}'"
           echo "github.event_name = '${{ github.event_name }}'"
           echo "github.event.inputs.publish = '${{ github.event.inputs.publish }}'"
 
   publish-hf:
-    needs: build
-    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
+    needs: enrich-parquet
+    if: ${{ !cancelled() && inputs.publish && needs.enrich-parquet.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -231,13 +323,13 @@ jobs:
       - run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
       - uses: actions/download-artifact@v4
         with:
-          name: wikipedia-${{ needs.build.outputs.code }}
+          name: wikipedia-${{ needs.enrich-parquet.outputs.code }}
           path: release
       - name: Download rebuilt sources (fresh rebuild only)
-        if: needs.build.outputs.mode == 'rebuild'
+        if: needs.enrich-parquet.outputs.mode == 'rebuild'
         uses: actions/download-artifact@v4
         with:
-          name: sources-${{ needs.build.outputs.code }}
+          name: sources-${{ needs.enrich-parquet.outputs.code }}
           path: sources
       - name: Publish bundle and rebuilt sources to Hugging Face
         shell: bash
@@ -247,8 +339,8 @@ jobs:
           python -m scripts.publish_hf "${args[@]}"
 
   publish-kaggle:
-    needs: build
-    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
+    needs: enrich-parquet
+    if: ${{ !cancelled() && inputs.publish && needs.enrich-parquet.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -263,15 +355,15 @@ jobs:
       - run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
       - uses: actions/download-artifact@v4
         with:
-          name: wikipedia-${{ needs.build.outputs.code }}
+          name: wikipedia-${{ needs.enrich-parquet.outputs.code }}
           path: release
       - name: Authenticate Kaggle CLI
         run: python scripts/kaggle_auth.py --owner ffatty
       - run: python -m scripts.publish_kaggle --language "$LANGUAGE" --folder release
 
   publish-zenodo:
-    needs: build
-    if: ${{ !cancelled() && inputs.publish && needs.build.result == 'success' }}
+    needs: enrich-parquet
+    if: ${{ !cancelled() && inputs.publish && needs.enrich-parquet.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -286,12 +378,12 @@ jobs:
       - run: python -m pip install --no-index --find-links vendor/wheels -r requirements-features.txt
       - uses: actions/download-artifact@v4
         with:
-          name: wikipedia-${{ needs.build.outputs.code }}
+          name: wikipedia-${{ needs.enrich-parquet.outputs.code }}
           path: release
       - run: python -m scripts.publish_zenodo --language "$LANGUAGE" --folder release
 
   report:
-    needs: [resolve, build, publish-hf, publish-kaggle, publish-zenodo]
+    needs: [resolve, enrich-parquet, publish-hf, publish-kaggle, publish-zenodo]
     if: always() && inputs.publish
     runs-on: ubuntu-24.04
     steps:
@@ -299,14 +391,14 @@ jobs:
         shell: bash
         run: |
           {
-            echo "| Publisher | Result |"
+            echo "| Stage | Result |"
             echo "|---|---|"
-            echo "| Build | ${{ needs.build.result }} |"
+            echo "| Build (corpus-stats / fasttext-training / enrich-parquet) | ${{ needs.enrich-parquet.result }} |"
             echo "| Hugging Face | ${{ needs['publish-hf'].result }} |"
             echo "| Kaggle | ${{ needs['publish-kaggle'].result }} |"
             echo "| Zenodo | ${{ needs['publish-zenodo'].result }} |"
           } >> "$GITHUB_STEP_SUMMARY"
-          if [[ "${{ needs.build.result }}" != success || "${{ needs['publish-hf'].result }}" != success || "${{ needs['publish-kaggle'].result }}" != success || "${{ needs['publish-zenodo'].result }}" != success ]]; then
+          if [[ "${{ needs.enrich-parquet.result }}" != success || "${{ needs['publish-hf'].result }}" != success || "${{ needs['publish-kaggle'].result }}" != success || "${{ needs['publish-zenodo'].result }}" != success ]]; then
             echo "::error::One or more publishers failed; the build bundle artifact is retained for retry"
             exit 1
           fi

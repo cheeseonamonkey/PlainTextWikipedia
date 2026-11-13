@@ -3,6 +3,7 @@ import gzip
 import json
 import tempfile
 import unittest
+import zlib
 from collections import Counter
 from pathlib import Path
 
@@ -26,6 +27,34 @@ class LexicalFeaturesTests(unittest.TestCase):
         self.assertIsNone(normalizer.stemmer)
         self.assertEqual(list(normalizer.words(tokens('CAFÉ ΣΊΓΜΑ'))), ['café','σίγμα'])
         self.assertIn('unavailable', normalizer.config()['morphology'])
+
+    def test_all_text_is_unicode_normalized_before_indexing(self):
+        normalizer = LexicalNormalizer('en')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / 'source.txt.gz'
+            title = 'Caf\u00e9\u2014Strau\u00dfe'
+            body = 'The caf\u00e9\u2019s na\u00efve façade uses a non-breaking\u00a0space.'
+            with gzip.open(source, 'wt', encoding='utf-8') as out:
+                out.write(f'{title}\n{body}\n\n')
+            db = open_database(root / 'index.sqlite')
+            self.addCleanup(db.close)
+            candidate, training = root / 'candidate.gz', root / 'training.txt'
+            ingest([source], db, candidate, 'en', normalizer, root / 'articles.txt.xz')
+            row = db.execute('SELECT title,counts,token_count,char_count FROM articles').fetchone()
+            # Titles are stored verbatim: NFKC keeps 'ß' intact (it does not expand
+            # it to 'ss'; that is casefold, which is only applied to tokens).
+            self.assertEqual(row['title'], 'Café—Strauße')
+            counts = json.loads(zlib.decompress(row['counts']))
+            # The tokenizer keeps intra-word apostrophes, so "café's" is one token.
+            self.assertIn("café's", counts)
+            self.assertIn('naïve', counts)
+            self.assertIn('façade', counts)
+            self.assertEqual(row['char_count'], len('The café’s naïve façade uses a non-breaking space.'))
+            # The token pipeline is where 'ß' folds to 'ss' (casefold); stem() itself
+            # never folds, it only reduces an already-folded token.
+            self.assertEqual(tokens('straße'), ['strasse'])
+            self.assertEqual(normalizer.stem(tokens('straße')[0]), 'strass')
 
     def test_stemmed_document_frequency_and_shared_training_vocabulary(self):
         with tempfile.TemporaryDirectory() as tmp:
